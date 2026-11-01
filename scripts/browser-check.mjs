@@ -130,10 +130,10 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     check(`${name}: a wide character takes two cells`, Math.abs(wide.width - cw * 2) < 0.5, `${wide.width} vs ${cw * 2}`)
     const red = await page.locator('.dsk-term-row').nth(1).locator('span').first().evaluate((el) => getComputedStyle(el).color)
     check(`${name}: colours`, red === 'rgb(207, 34, 46)', red)
-    // A link: Cmd/Ctrl+click hands it to the host.
-    await page.keyboard.down(name === 'webkit' || process.platform === 'darwin' ? 'Meta' : 'Control')
+    // A link: Cmd+click on a Mac, Ctrl+click elsewhere (the view goes by the system) hands it to the host.
+    await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control')
     await page.locator('.dsk-term-link').click()
-    await page.keyboard.up(name === 'webkit' || process.platform === 'darwin' ? 'Meta' : 'Control')
+    await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control')
     check(`${name}: a link opened by the host`, (await page.evaluate(() => window.links[0])) === 'https://example.com/x')
 
     // A real full-screen program in the dark theme.
