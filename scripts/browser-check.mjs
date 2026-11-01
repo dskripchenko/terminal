@@ -49,7 +49,7 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.waitForTimeout(150)
     const rows = await page.locator('.dsk-term-row').count()
     // The box holds fewer rows than vim was recorded with: the rows in view, not all of them.
-    check(`${name}: only the rows in view are in the page`, rows >= size[1] && rows <= size[1] + 2, String(rows))
+    check(`${name}: only the rows in view are in the page`, rows >= Math.min(size[1], vim.rows) && rows <= size[1] + 2, String(rows))
     await page.screenshot({ path: join(output, `${name}-vim.png`) })
     await page.evaluate(() => window.view.fit())
 
@@ -78,6 +78,13 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.waitForTimeout(100)
     const last = await page.locator('.dsk-term-row').last().textContent()
     check(`${name}: at the bottom after output`, last?.trim() === 'line 299', last ?? '')
+    // Scrolled to the bottom, the top row is whole, not cut by the edge.
+    const edge = await page.evaluate(() => {
+      const box = document.querySelector('.dsk-term').getBoundingClientRect()
+      const rows = [...document.querySelectorAll('.dsk-term-row')].map((r) => r.getBoundingClientRect()).filter((r) => r.bottom > box.top)
+      return rows[0].top - box.top
+    })
+    check(`${name}: the top row is whole at the bottom`, edge >= 0, String(edge))
     await page.locator('.dsk-term').evaluate((el) => (el.scrollTop = 0))
     await page.waitForTimeout(100)
     check(`${name}: scrolled to the top: the first lines`, (await page.locator('.dsk-term-row').first().textContent())?.trim() === 'line 0')
@@ -140,11 +147,15 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.goto(base + '?dark')
     await page.waitForFunction(() => window.ready)
     const htop = session('htop')
-    await page.evaluate(({ cols, rows, chunks }) => {
-      window.term.resize(cols, rows)
+    // After a long output: the full-screen program hides the cursor; its screen is still the one in view.
+    await page.evaluate(() => window.term.write(Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\r\n')))
+    await page.waitForTimeout(100)
+    await page.evaluate(({ chunks }) => {
       for (const c of chunks.slice(0, -2)) window.term.write(c)
     }, htop)
     await page.waitForTimeout(150)
+    const scroll = await page.locator('.dsk-term').evaluate((el) => [el.scrollTop, el.scrollHeight, el.clientHeight])
+    check(`${name}: a full-screen program after long output: its screen in view`, scroll[1] <= scroll[2] + 2 && (await page.locator('.dsk-term-row', { hasText: 'F1Help' }).isVisible()), scroll.join(','))
     await page.screenshot({ path: join(output, `${name}-htop-dark.png`) })
     check(`${name}: no errors`, errors.length === 0, errors.join('; '))
   } catch (e) {

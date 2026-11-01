@@ -50,7 +50,7 @@ export interface TerminalViewOptions {
 }
 
 const CSS = `
-.dsk-term { position: relative; overflow-y: auto; overflow-x: hidden; box-sizing: border-box; height: 100%; padding: 4px 8px; background: var(--dsk-term-bg); color: var(--dsk-term-fg); cursor: text; outline: none; }
+.dsk-term { position: relative; overflow-y: auto; overflow-x: hidden; box-sizing: border-box; height: 100%; padding: 0 8px 4px; background: var(--dsk-term-bg); color: var(--dsk-term-fg); cursor: text; outline: none; }
 .dsk-term.reverse { background: var(--dsk-term-fg); color: var(--dsk-term-bg); }
 .dsk-term-rows { position: absolute; left: 8px; right: 8px; top: 0; }
 .dsk-term-row { white-space: pre; overflow: hidden; }
@@ -163,8 +163,9 @@ export class TerminalView {
     this.input.setAttribute('autocorrect', 'off')
     this.input.spellcheck = false
     this.input.setAttribute('aria-label', 'Terminal input')
-    this.rowsEl.append(this.selLayer, this.cursorEl)
-    this.element.append(this.spacer, this.rowsEl, this.input)
+    // The input field lives among the rows: placed at the cursor, it never makes the scroll longer.
+    this.rowsEl.append(this.selLayer, this.cursorEl, this.input)
+    this.element.append(this.spacer, this.rowsEl)
     host.append(this.element)
     this.measure()
 
@@ -289,7 +290,10 @@ export class TerminalView {
     this.trimmed = term.trimmed
     if (cut > 0 && !this.atBottom) this.element.scrollTop = Math.max(0, this.element.scrollTop - cut * this.rowH)
     const style = getComputedStyle(this.element)
-    this.spacer.style.height = `${total * this.rowH}px`
+    // What is left below whole rows goes under the last one: scrolled to the bottom, the top row is whole.
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+    const extra = Math.max(0, this.element.clientHeight - padding - term.rows * this.rowH)
+    this.spacer.style.height = `${total * this.rowH + extra}px`
     if (this.atBottom) this.element.scrollTop = this.element.scrollHeight
     const visible = Math.ceil(this.element.clientHeight / this.rowH) + 1
     // The scroll position may still be the old one (the buffer just shrank): never past the rows there are.
@@ -333,7 +337,7 @@ export class TerminalView {
       Object.assign(this.cursorEl.style, { left: `${b.x * this.cellW}px`, top: `${cy * this.rowH}px`, width: `${this.cellW * (wide ? 2 : 1)}px`, height: `${this.rowH}px` })
       this.cursorEl.textContent = term.cursorStyle === 'block' ? line.char(b.x) || ' ' : ''
       // The input field at the cursor: an input method's window opens there.
-      Object.assign(this.input.style, { left: `${8 + b.x * this.cellW}px`, top: `${parseFloat(style.paddingTop) + (b.base + b.y) * this.rowH}px` })
+      Object.assign(this.input.style, { left: `${b.x * this.cellW}px`, top: `${cy * this.rowH}px` })
     }
     this.drawSelection(top, count)
   }
