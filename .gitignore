@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+.DS_Store
+*.local
+.npmrc
+tests/browser/output
+.claude/
+tests/browser/output

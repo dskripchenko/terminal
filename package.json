@@ -1,0 +1,75 @@
+{
+  "name": "@dskripchenko/terminal",
+  "version": "0.0.0",
+  "description": "A terminal emulator for the browser with zero runtime dependencies: the VT/xterm escape sequences, a screen with scrollback and an alternate screen, 16/256/true colours, wide characters, reflow on resize, selection, keyboard and mouse input, links — drawn in the DOM, only the rows in view",
+  "keywords": [
+    "terminal",
+    "terminal-emulator",
+    "xterm",
+    "vt100",
+    "ansi",
+    "escape-sequences",
+    "console",
+    "pty",
+    "zero-dependency"
+  ],
+  "homepage": "https://github.com/dskripchenko/terminal#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dskripchenko/terminal.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dskripchenko/terminal/issues"
+  },
+  "license": "MIT",
+  "author": "Denis Skripchenko (https://github.com/dskripchenko)",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.build.json && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src tests scripts",
+    "typecheck": "tsc --noEmit",
+    "changeset": "changeset",
+    "release": "pnpm build && changeset publish",
+    "check:browser": "pnpm build && node scripts/browser-check.mjs"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.3",
+    "@eslint/js": "^10.0.1",
+    "@microsoft/api-extractor": "^7.60.1",
+    "@types/node": "^22.20.5",
+    "@xterm/headless": "^6.0.0",
+    "eslint": "^10.13.0",
+    "jsdom": "^25.0.1",
+    "playwright": "1.64.1",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.0",
+    "vite": "^8.3.5",
+    "vite-plugin-dts": "^5.1.2",
+    "vitest": "^5.0.5"
+  }
+}
