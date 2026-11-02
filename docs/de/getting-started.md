@@ -111,6 +111,35 @@ Mausberichte sendet das Rad Pfeile.
 `--dsk-term-bg`, `--dsk-term-cursor`, `--dsk-term-selection`,
 `--dsk-term-0` … `--dsk-term-15`. `LIGHT_THEME` und `DARK_THEME` sind fertig.
 
+## Shell-Integration
+
+Eine Shell, die ihre Befehle markiert — OSC 133 (`A` eine Eingabeaufforderung,
+`B` der getippte Befehl, `C` er läuft, `D;Code` er endete), dasselbe aus VS Codes
+633 und `633;E;Text` für das Ausgeführte —, wird gelesen: `term.commands` listet
+die Befehle (Zeilen, Exit-Code, Text, Start- und Endzeit), `term.onCommand`
+meldet jede Änderung. Die Ansicht setzt neben die Eingabeaufforderung jedes
+Befehls eine Marke — läuft, fertig, fehlgeschlagen; beim Darüberfahren Befehl,
+Exit-Code und Dauer; ein Klick auf die Marke wählt die Ausgabe des Befehls aus —,
+und `view.scrollToCommand(-1 | 1)` holt die vorige oder nächste
+Eingabeaufforderung nach oben. Die Skripte, die zsh, bash oder PowerShell ihre
+Befehle markieren lassen, sind Sache des Hosts.
+
+## Links, Suchen, Leeren
+
+```ts
+new TerminalView(term, host, {
+  onLink: (url) => openInBrowser(url),
+  links: [{ pattern: /[\w./-]+\.\w+:\d+/g, activate: (text) => openAtLine(text) }],
+})
+```
+
+Webadressen und OSC-8-Hyperlinks gehen an `onLink`; jeder Eintrag von `links`
+findet im Text seine Art (ein Pfad mit Zeile, eine Ticketnummer) und öffnet sie
+mit Cmd (Strg) und Klick. `view.find(pattern)` markiert jeden Treffer im
+Rücklauf und auf dem Bildschirm und liefert ihre Anzahl; `view.showMatch(i)`
+macht einen aktuell und scrollt hin; `view.clearFind()`. `view.clear()` leert
+Rücklauf und Bildschirm und behält die Zeile der Eingabeaufforderung oben.
+
 ## Nicht unterstützt
 
 Bilder im Terminal (Sixel, iTerm2, Kitty-Grafik), das Kitty-Tastaturprotokoll,

@@ -107,6 +107,34 @@ arrows.
 `--dsk-term-fg`, `--dsk-term-bg`, `--dsk-term-cursor`, `--dsk-term-selection`,
 `--dsk-term-0` … `--dsk-term-15`. `LIGHT_THEME` and `DARK_THEME` are ready.
 
+## Shell integration
+
+A shell that marks its commands — OSC 133 (`A` a prompt, `B` the command
+typed, `C` it runs, `D;code` it ended), the same from VS Code's 633, and
+`633;E;text` for what was run — gets them read: `term.commands` lists them
+(rows, exit code, text, start and end times), `term.onCommand` tells each
+change. The view puts a mark beside each command's prompt — running, done,
+failed, with the command, its exit code and how long it took on hover; a click
+on a mark selects the command's output — and `view.scrollToCommand(-1 | 1)`
+brings the previous or the next prompt to the top. The scripts that make zsh,
+bash or PowerShell mark their commands are the host's.
+
+## Links, finding, clearing
+
+```ts
+new TerminalView(term, host, {
+  onLink: (url) => openInBrowser(url),
+  links: [{ pattern: /[\w./-]+\.\w+:\d+/g, activate: (text) => openAtLine(text) }],
+})
+```
+
+Web addresses and OSC 8 hyperlinks go to `onLink`; each of `links` finds its
+own kind in the text (a path with a line, an issue number) and opens it with
+Cmd (Ctrl) and a click. `view.find(pattern)` marks every match in the
+scrollback and the screen and returns how many; `view.showMatch(i)` makes one
+current and scrolls to it; `view.clearFind()`. `view.clear()` empties the
+scrollback and the screen, keeping the prompt's row at the top.
+
 ## Not supported
 
 Pictures in the terminal (sixel, iTerm2, Kitty graphics), the Kitty keyboard

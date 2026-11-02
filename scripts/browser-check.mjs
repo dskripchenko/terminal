@@ -143,6 +143,42 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control')
     check(`${name}: a link opened by the host`, (await page.evaluate(() => window.links[0])) === 'https://example.com/x')
 
+    // Shell integration: a mark beside each command, by how it ended; Cmd+click a path.
+    await page.evaluate(() => {
+      window.term.reset()
+      window.links.length = 0
+      const A = '\x1b]133;A\x07', B = '\x1b]133;B\x07', C = '\x1b]133;C\x07', D = (c) => `\x1b]133;D;${c}\x07`, E = (t) => `\x1b]633;E;${t}\x07`
+      window.term.write(`${A}$ ${B}make\r\n${E('make')}${C}src/main.ts:12 error\r\nmore\r\n${D(2)}${A}$ ${B}ls\r\n${E('ls')}${C}a b\r\n${D(0)}${A}$ ${B}sleep 9\r\n${E('sleep 9')}${C}`)
+      window.view.scrollToBottom()
+    })
+    await page.waitForTimeout(150)
+    const marks = await page.locator('.dsk-term-mark').evaluateAll((els) => els.map((e) => e.className.replace('dsk-term-mark ', '') + ':' + e.title))
+    check(`${name}: a mark for each command, by how it ended`, marks.length === 3 && marks[0].startsWith('fail:make · exit 2') && marks[1].startsWith('ok:ls · exit 0') && marks[2].startsWith('running:sleep 9'), JSON.stringify(marks))
+    await page.locator('.dsk-term-mark.fail').click()
+    check(`${name}: a click on a mark selects the command's output`, (await page.evaluate(() => window.view.getSelection())) === 'src/main.ts:12 error\nmore', JSON.stringify(await page.evaluate(() => window.view.getSelection())))
+    await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control')
+    await page.locator('.dsk-term-link', { hasText: 'src/main.ts:12' }).click()
+    await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control')
+    check(`${name}: a path link handed to the host`, (await page.evaluate(() => window.links[0])) === 'path:src/main.ts:12')
+    // Find in the buffer: every match marked, one current.
+    const n = await page.evaluate(() => window.view.find(/e/i))
+    await page.evaluate(() => window.view.showMatch(1))
+    await page.waitForTimeout(100)
+    check(`${name}: find marks the matches`, n >= 4 && (await page.locator('.dsk-term-match').count()) === n && (await page.locator('.dsk-term-match.current').count()) === 1, String(n))
+    await page.evaluate(() => window.view.clearFind())
+    // From command to command; then clear, the prompt kept.
+    await page.evaluate(() => {
+      window.term.write('\r\n' + Array.from({ length: 80 }, (_, i) => `out ${i}`).join('\r\n'))
+      window.view.scrollToBottom()
+    })
+    await page.waitForTimeout(100)
+    const moved = await page.evaluate(() => window.view.scrollToCommand(-1))
+    await page.waitForTimeout(100)
+    check(`${name}: to the previous command`, moved && (await page.locator('.dsk-term-row').first().textContent()).startsWith('$ sleep 9'), await page.locator('.dsk-term-row').first().textContent())
+    await page.evaluate(() => window.view.clear())
+    await page.waitForTimeout(100)
+    check(`${name}: clear keeps the prompt row`, (await page.evaluate(() => window.term.buffer.lines.length)) === (await page.evaluate(() => window.term.rows)) && (await page.locator('.dsk-term-row').first().textContent()).startsWith('out 79'))
+
     // A real full-screen program in the dark theme.
     await page.goto(base + '?dark')
     await page.waitForFunction(() => window.ready)

@@ -83,6 +83,26 @@ new TerminalView(term, host, {
 
 **颜色**是视图元素上的 CSS 自定义属性：`--dsk-term-fg`、`--dsk-term-bg`、`--dsk-term-cursor`、`--dsk-term-selection`、`--dsk-term-0` … `--dsk-term-15`。已提供 `LIGHT_THEME` 和 `DARK_THEME`。
 
+## Shell 集成
+
+标记自身命令的 shell——OSC 133（`A` 提示符，`B` 输入的命令，`C` 开始执行，`D;代码` 结束），VS Code 633 的同样标记，以及表示所执行内容的
+`633;E;文本`——会被读取：`term.commands` 列出这些命令（行、退出码、文本、开始与结束时间），`term.onCommand` 通知每次变化。视图在每条命令的提示符旁放置标记——
+运行中、完成、失败；悬停显示命令、退出码和耗时；点击标记会选中该命令的输出——`view.scrollToCommand(-1 | 1)` 将上一个或下一个提示符滚到顶部。
+让 zsh、bash 或 PowerShell 标记命令的脚本由宿主提供。
+
+## 链接、查找、清屏
+
+```ts
+new TerminalView(term, host, {
+  onLink: (url) => openInBrowser(url),
+  links: [{ pattern: /[\w./-]+\.\w+:\d+/g, activate: (text) => openAtLine(text) }],
+})
+```
+
+网址和 OSC 8 超链接交给 `onLink`；`links` 中的每一项在文本中查找自己的链接类型（带行号的路径、问题编号），按住 Cmd（Ctrl）点击即可打开。
+`view.find(pattern)` 标出回滚区和屏幕中的所有匹配并返回数量；`view.showMatch(i)` 将其中一个设为当前并滚动过去；`view.clearFind()`。
+`view.clear()` 清空回滚区和屏幕，把提示符所在行保留在顶部。
+
 ## 不支持
 
 终端内图片（sixel、iTerm2、Kitty 图形）、Kitty 键盘协议、双宽和双高行（DECDWL、DECDHL）、132 列模式、从右到左的文本、从输出写入剪贴板（OSC 52，有意拒绝）。DCS 字符串（`tmux` 透传、`DECRQSS`）会被读取并丢弃。
