@@ -1,6 +1,6 @@
 {
   "name": "@dskripchenko/terminal",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A terminal emulator for the browser with zero runtime dependencies: the VT/xterm escape sequences, a screen with scrollback and an alternate screen, 16/256/true colours, wide characters, reflow on resize, selection, keyboard and mouse input, links — drawn in the DOM, only the rows in view",
   "keywords": [
     "terminal",
