@@ -25,6 +25,25 @@ export type MouseTracking = 'none' | 'click' | 'drag' | 'any'
 
 export type Listener<T> = (value: T) => void
 
+/**
+ * A command as the shell marks it (OSC 133, or VS Code's 633): where its
+ * prompt starts, where what was typed starts, where its output starts and
+ * ends, its exit code and times. Rows are absolute — a row's index in the
+ * buffer plus `trimmed` — so they stay put while the scrollback is cut.
+ */
+export interface Command {
+  prompt: number
+  input?: number
+  output?: number
+  end?: number
+  /** What was run, when the shell says (633;E). */
+  text?: string
+  exitCode?: number
+  /** Milliseconds since the epoch. */
+  started?: number
+  ended?: number
+}
+
 /** The cursor as saved by DECSC / ESC 7. */
 interface Saved {
   x: number
@@ -120,6 +139,9 @@ export class Terminal implements ParserHandler {
   private readonly bellListeners: Listener<void>[] = []
   private readonly cwdListeners: Listener<string>[] = []
   private readonly markListeners: Listener<{ kind: string; row: number }>[] = []
+  private readonly commandListeners: Listener<Command>[] = []
+  /** The commands of the normal screen, oldest first (shell integration). */
+  commands: Command[] = []
 
   constructor(o: TerminalOptions = {}) {
     this.cols = Math.max(2, o.cols ?? 80)
@@ -163,6 +185,16 @@ export class Terminal implements ParserHandler {
     return on(this.markListeners, listener)
   }
 
+  /** A command began, ran or ended (shell integration). */
+  onCommand(listener: Listener<Command>): () => void {
+    return on(this.commandListeners, listener)
+  }
+
+  /** The command running now, or the last one. */
+  get lastCommand(): Command | null {
+    return this.commands[this.commands.length - 1] ?? null
+  }
+
   /** Send to the program (a view's keys, a paste). */
   input(data: string): void {
     for (const l of this.dataListeners) l(data)
@@ -202,6 +234,7 @@ export class Terminal implements ParserHandler {
     for (let i = 0; i < this.rows; i++) this.normal.lines.push(new Line(this.cols))
     this.alt = new ScreenBuffer(this.cols, this.rows, false)
     this.buffer = this.normal
+    this.commands = []
     for (const b of [this.normal, this.alt]) {
       b.x = b.y = 0
       b.top = 0
@@ -443,9 +476,12 @@ export class Terminal implements ParserHandler {
       case '11':
         if (rest === '?') this.reply(`\x1b]${code};${xColor(code === '10' ? this.fgColor : this.bgColor)}\x1b\\`)
         return
-      case '133': {
+      case '133':
+      case '633': {
         const kind = rest.charAt(0)
-        if (kind) for (const l of this.markListeners) l({ kind, row: this.buffer.base + this.buffer.y + this.trimmed })
+        const row = this.buffer.base + this.buffer.y + this.trimmed
+        if (kind) for (const l of this.markListeners) l({ kind, row })
+        this.mark(kind, rest.slice(2), row)
         return
       }
     }
@@ -606,6 +642,65 @@ export class Terminal implements ParserHandler {
         if (raw(0) === 18) this.reply(`\x1b[8;${this.rows};${this.cols}t`)
         break
     }
+  }
+
+  /** Shell integration: A a prompt, B the command typed, C it runs, D it ended (`D;code`), E its text. */
+  private mark(kind: string, arg: string, row: number): void {
+    // A full-screen program's own marks are not the shell's.
+    if (this.buffer !== this.normal) return
+    let c = this.lastCommand
+    switch (kind) {
+      case 'A':
+        // The last one never said it ended (Ctrl+C at the prompt): it ends here.
+        if (c && c.output !== undefined && c.end === undefined) c.end = row
+        c = { prompt: row }
+        this.commands.push(c)
+        if (this.commands.length > 5000) this.commands.splice(0, this.commands.length - 5000)
+        break
+      case 'B':
+        if (!c) return
+        c.input = row
+        break
+      case 'C':
+        if (!c) return
+        c.output = row
+        c.started = Date.now()
+        break
+      case 'D': {
+        if (!c || c.end !== undefined) return
+        // A prompt that ran nothing (Enter on an empty line) is not a command.
+        if (c.output === undefined) return
+        c.end = row
+        c.ended = Date.now()
+        const code = Number.parseInt(arg, 10)
+        if (Number.isFinite(code)) c.exitCode = code
+        break
+      }
+      case 'E':
+        if (!c) return
+        // VS Code's escaping: \\ and \xAB.
+        c.text = arg.split(';')[0]!.replace(/\\x([0-9a-fA-F]{2})|\\\\/g, (_m, hex: string | undefined) => (hex ? String.fromCharCode(parseInt(hex, 16)) : '\\'))
+        break
+      default:
+        return
+    }
+    for (const l of this.commandListeners) l(c)
+  }
+
+  /**
+   * Clear (Cmd+K): the scrollback and the screen gone, the row with the cursor
+   * — the prompt — kept at the top.
+   */
+  clear(): void {
+    const b = this.normal
+    if (this.buffer !== b) return
+    const keep = b.row(b.y).clone()
+    const removed = b.base + b.y
+    b.lines = [keep, ...Array.from({ length: this.rows - 1 }, () => new Line(this.cols))]
+    b.y = 0
+    this.trimmed += removed
+    this.commands = this.commands.filter((c) => c.prompt >= this.trimmed)
+    for (const l of this.changeListeners) l()
   }
 
   // Modes -----------------------------------------------------------------------------
@@ -822,6 +917,7 @@ export class Terminal implements ParserHandler {
       if (extra > 0) {
         b.lines.splice(0, extra)
         this.trimmed += extra
+        if (this.commands.length && this.commands[0]!.prompt < this.trimmed) this.commands = this.commands.filter((c) => c.prompt >= this.trimmed)
       }
       return
     }
@@ -929,6 +1025,8 @@ export class Terminal implements ParserHandler {
 
     // Logical lines: rows joined where they wrapped.
     const out: Line[] = []
+    // Each old row's new place (its logical line's first row): for the commands' marks.
+    const moved = new Map<number, number>()
     let newCursorRow = 0
     let newCursorX = 0
     for (let i = 0; i < lines.length; ) {
@@ -956,6 +1054,7 @@ export class Terminal implements ParserHandler {
       }
       // Laid out again to the new width.
       const first = out.length
+      for (let k = 0; k < group.length; k++) moved.set(groupStart + k, first)
       let row = new Line(cols)
       let x = 0
       for (let c = 0; c < cells.length; c++) {
@@ -994,6 +1093,18 @@ export class Terminal implements ParserHandler {
     b.lines = out
     b.x = Math.min(newCursorX, cols - 1)
     b.y = newCursorRow - base
+    if (b === this.normal && this.commands.length) {
+      const before = this.trimmed - Math.max(0, extra)
+      const place = (row: number | undefined): number | undefined => {
+        if (row === undefined) return undefined
+        const old = row - before
+        const next = moved.get(old) ?? (old > last ? moved.get(last) ?? old : old)
+        return next - Math.max(0, extra) + this.trimmed
+      }
+      this.commands = this.commands
+        .map((c) => ({ ...c, prompt: place(c.prompt)!, input: place(c.input), output: place(c.output), end: place(c.end) }))
+        .filter((c) => c.prompt >= this.trimmed)
+    }
   }
 }
 

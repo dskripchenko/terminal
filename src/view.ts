@@ -45,14 +45,26 @@ export interface TerminalViewOptions {
   altIsMeta?: boolean
   /** A link clicked with Cmd (Ctrl): open it — the host decides how. */
   onLink?: (url: string) => void
+  /**
+   * More kinds of links in the text — a path with a line (`src/a.ts:12`), an
+   * issue number — each found by its pattern and opened, with Cmd (Ctrl) and
+   * a click, by its `activate`.
+   */
+  links?: LinkProvider[]
   /** The size changed (`fit`): the pseudo-terminal behind should change too. */
   onResize?: (cols: number, rows: number) => void
 }
 
+export interface LinkProvider {
+  /** What it finds in a row's text (matched as a global expression). */
+  pattern: RegExp
+  activate(text: string, event: MouseEvent): void
+}
+
 const CSS = `
-.dsk-term { position: relative; overflow-y: auto; overflow-x: hidden; box-sizing: border-box; height: 100%; padding: 0 8px 4px; background: var(--dsk-term-bg); color: var(--dsk-term-fg); cursor: text; outline: none; }
+.dsk-term { position: relative; overflow-y: auto; overflow-x: hidden; box-sizing: border-box; height: 100%; padding: 0 8px 4px 18px; background: var(--dsk-term-bg); color: var(--dsk-term-fg); cursor: text; outline: none; }
 .dsk-term.reverse { background: var(--dsk-term-fg); color: var(--dsk-term-bg); }
-.dsk-term-rows { position: absolute; left: 8px; right: 8px; top: 0; }
+.dsk-term-rows { position: absolute; left: 18px; right: 8px; top: 0; }
 .dsk-term-row { white-space: pre; overflow: hidden; }
 .dsk-term-row span { white-space: pre; }
 .dsk-term-wide { display: inline-block; text-align: center; overflow: visible; }
@@ -65,7 +77,17 @@ const CSS = `
 @keyframes dsk-term-blink { 50% { opacity: 0; } }
 .dsk-term-sel { position: absolute; pointer-events: none; background: var(--dsk-term-selection); }
 .dsk-term-input { position: absolute; width: 1px; height: 1px; padding: 0; border: 0; margin: 0; opacity: 0; resize: none; overflow: hidden; white-space: pre; z-index: -1; }
-.dsk-term-link { text-decoration: underline; cursor: pointer; }
+.dsk-term-link { cursor: pointer; }
+.dsk-term-link.url, .dsk-term-link:hover { text-decoration: underline; }
+.dsk-term-mark { position: absolute; left: -12px; width: 6px; height: 6px; border-radius: 50%; background: var(--dsk-term-8); cursor: pointer; }
+.dsk-term-mark.ok { background: var(--dsk-term-2); }
+.dsk-term-mark.fail { background: var(--dsk-term-1); }
+.dsk-term-mark.running { background: var(--dsk-term-4); animation: dsk-term-pulse 1.2s ease-in-out infinite; }
+@keyframes dsk-term-pulse { 50% { opacity: 0.3; } }
+.dsk-term-match { position: absolute; pointer-events: none; background: rgba(255, 196, 0, 0.35); border-radius: 2px; }
+.dsk-term-match.current { background: rgba(255, 140, 0, 0.7); }
+.dsk-term-flash { position: absolute; left: -18px; right: -8px; pointer-events: none; background: color-mix(in srgb, var(--dsk-term-4) 18%, transparent); animation: dsk-term-flash 0.9s ease-out forwards; }
+@keyframes dsk-term-flash { to { opacity: 0; } }
 .dsk-term.bell { animation: dsk-term-bell 0.2s; }
 @keyframes dsk-term-bell { from { filter: brightness(1.6); } }
 .dsk-term-blink { animation: dsk-term-blink 1s step-end infinite; }
@@ -120,6 +142,10 @@ export class TerminalView {
   private readonly spacer: HTMLElement
   private readonly cursorEl: HTMLElement
   private readonly selLayer: HTMLElement
+  private readonly markLayer: HTMLElement
+  private found: { row: number; from: number; to: number }[] = []
+  private currentMatch = -1
+  private readonly providers: { pattern: RegExp; activate: (text: string, e: MouseEvent) => void; url: boolean }[]
   private readonly input: HTMLTextAreaElement
   private cellW = 8
   private rowH = 16
@@ -145,6 +171,11 @@ export class TerminalView {
     addStyle()
     this.o = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.25, ...options }
     this.trimmed = term.trimmed
+    // Addresses first (when the host opens them), then the host's own kinds of links.
+    this.providers = [
+      ...(options.onLink ? [{ pattern: URL_RE, activate: (url: string) => options.onLink!(url), url: true }] : []),
+      ...(options.links ?? []).map((l) => ({ pattern: new RegExp(l.pattern.source, l.pattern.flags.includes('g') ? l.pattern.flags : l.pattern.flags + 'g'), activate: l.activate, url: false })),
+    ]
     this.element = document.createElement('div')
     this.element.className = 'dsk-term'
     this.element.setAttribute('role', 'log')
@@ -154,6 +185,7 @@ export class TerminalView {
     this.rowsEl = document.createElement('div')
     this.rowsEl.className = 'dsk-term-rows'
     this.selLayer = document.createElement('div')
+    this.markLayer = document.createElement('div')
     this.cursorEl = document.createElement('div')
     this.cursorEl.className = 'dsk-term-cursor'
     this.input = document.createElement('textarea')
@@ -164,12 +196,13 @@ export class TerminalView {
     this.input.spellcheck = false
     this.input.setAttribute('aria-label', 'Terminal input')
     // The input field lives among the rows: placed at the cursor, it never makes the scroll longer.
-    this.rowsEl.append(this.selLayer, this.cursorEl, this.input)
+    this.rowsEl.append(this.selLayer, this.markLayer, this.cursorEl, this.input)
     this.element.append(this.spacer, this.rowsEl)
     host.append(this.element)
     this.measure()
 
     this.off.push(term.onChange(() => this.schedule()))
+    this.off.push(term.onCommand(() => this.schedule()))
     this.off.push(term.onBell(() => this.bell()))
     this.listen()
     this.observer = new ResizeObserver(() => this.fit())
@@ -245,6 +278,71 @@ export class TerminalView {
   scrollToBottom(): void {
     this.atBottom = true
     this.element.scrollTop = this.element.scrollHeight
+    this.schedule()
+  }
+
+  /** Clear (Cmd+K): the scrollback and the screen, the prompt kept. */
+  clear(): void {
+    this.term.clear()
+    this.clearSelection()
+    this.found = []
+    this.scrollToBottom()
+  }
+
+  /** The previous (-1) or next (1) command's prompt brought to the top of the view; false when there is none. */
+  scrollToCommand(direction: -1 | 1): boolean {
+    const top = this.first + this.term.trimmed
+    const prompts = this.term.commands.map((c) => c.prompt)
+    const target = direction < 0 ? [...prompts].reverse().find((r) => r < top) : prompts.find((r) => r > top)
+    if (target === undefined) {
+      if (direction > 0) this.scrollToBottom()
+      return false
+    }
+    this.atBottom = false
+    this.element.scrollTop = (target - this.term.trimmed) * this.rowH
+    this.flash(target)
+    return true
+  }
+
+  /** Find in all the rows, the scrollback included; how many matches. */
+  find(pattern: RegExp): number {
+    const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g')
+    this.found = []
+    const lines = this.term.buffer.lines
+    for (let i = 0; i < lines.length && this.found.length < 10_000; i++) {
+      const { text, cols } = cellsOf(lines[i]!)
+      re.lastIndex = 0
+      for (let m = re.exec(text); m && this.found.length < 10_000; m = re.exec(text)) {
+        if (m[0] === '') {
+          re.lastIndex++
+          continue
+        }
+        this.found.push({ row: i + this.term.trimmed, from: cols[m.index]!, to: cols[m.index + m[0].length]! })
+      }
+    }
+    this.currentMatch = -1
+    this.schedule()
+    return this.found.length
+  }
+
+  /** Make a match the current one and, with `reveal`, scroll to it. */
+  showMatch(index: number, reveal = true): void {
+    this.currentMatch = index
+    const m = this.found[index]
+    if (m && reveal) {
+      const view = this.element
+      const y = (m.row - this.term.trimmed) * this.rowH
+      if (y < view.scrollTop || y > view.scrollTop + view.clientHeight - this.rowH * 2) {
+        this.atBottom = false
+        view.scrollTop = Math.max(0, y - view.clientHeight / 2)
+      }
+    }
+    this.schedule()
+  }
+
+  clearFind(): void {
+    this.found = []
+    this.currentMatch = -1
     this.schedule()
   }
 
@@ -340,6 +438,48 @@ export class TerminalView {
       Object.assign(this.input.style, { left: `${b.x * this.cellW}px`, top: `${cy * this.rowH}px` })
     }
     this.drawSelection(top, count)
+    this.drawMarks(top, count)
+  }
+
+  /** A command's mark beside its prompt: running, done, failed; its matches found. */
+  private drawMarks(top: number, count: number): void {
+    const t = this.term
+    const out: HTMLElement[] = []
+    if (t.buffer === t.normal) {
+      for (const c of t.commands) {
+        const i = c.prompt - t.trimmed - top
+        if (i < 0 || i >= count || c.output === undefined) continue
+        const d = document.createElement('div')
+        const state = c.end === undefined ? 'running' : c.exitCode === undefined || c.exitCode === 0 ? 'ok' : 'fail'
+        d.className = `dsk-term-mark ${state}`
+        d.style.top = `${i * this.rowH + (this.rowH - 6) / 2}px`
+        const time = c.ended && c.started ? duration(c.ended - c.started) : ''
+        d.title = [c.text, c.exitCode !== undefined ? `exit ${c.exitCode}` : '', time].filter(Boolean).join(' · ')
+        d.dataset.prompt = String(c.prompt)
+        out.push(d)
+      }
+    }
+    this.found.forEach((m, k) => {
+      const i = m.row - t.trimmed - top
+      if (i < 0 || i >= count) return
+      const d = document.createElement('div')
+      d.className = `dsk-term-match${k === this.currentMatch ? ' current' : ''}`
+      Object.assign(d.style, { left: `${m.from * this.cellW}px`, top: `${i * this.rowH}px`, width: `${(m.to - m.from) * this.cellW}px`, height: `${this.rowH}px` })
+      out.push(d)
+    })
+    this.markLayer.replaceChildren(...out)
+  }
+
+  private flash(row: number): void {
+    const d = document.createElement('div')
+    d.className = 'dsk-term-flash'
+    Object.assign(d.style, { top: `${(row - this.term.trimmed) * this.rowH}px`, height: `${this.rowH}px` })
+    // In the spacer's coordinates: it stays where the row is while the window moves.
+    d.style.top = `${parseFloat(getComputedStyle(this.element).paddingTop) + (row - this.term.trimmed) * this.rowH}px`
+    d.style.left = '0'
+    d.style.right = '0'
+    this.element.append(d)
+    setTimeout(() => d.remove(), 1000)
   }
 
   private rowHtml(line: Line): string {
@@ -350,8 +490,8 @@ export class TerminalView {
     let link = 0
     const flush = (): void => {
       if (run === '') return
-      const text = escapeHtml(run)
-      html += style || link ? `<span${style ? ` style="${style}"` : ''}${link ? ` class="dsk-term-link" data-link="${link}"` : ''}>${text}</span>` : text
+      const text = link ? escapeHtml(run) : this.linkify(run)
+      html += style || link ? `<span${style ? ` style="${style}"` : ''}${link ? ` class="dsk-term-link url" data-link="${link}"` : ''}>${text}</span>` : text
       run = ''
     }
     for (let x = 0; x < line.cols; x++) {
@@ -375,16 +515,34 @@ export class TerminalView {
       } else run += ch
     }
     flush()
-    return this.withLinks(html, line)
+    return html
   }
 
-  /** Addresses in plain text made links (OSC 8 links are marked already). */
-  private withLinks(html: string, line: Line): string {
-    if (!this.o.onLink) return html
-    const text = line.text()
-    if (!/:\/\//.test(text)) return html
-    // Only where the row is plain text around the address: a run in one style.
-    return html.replace(URL_RE, (url) => `<span class="dsk-term-link" data-url="${url}">${url}</span>`)
+  /** A run of text, escaped, with the links the providers find in it (the earliest first, none overlapping). */
+  private linkify(raw: string): string {
+    if (this.providers.length === 0) return escapeHtml(raw)
+    const found: { at: number; end: number; p: number }[] = []
+    this.providers.forEach((pr, p) => {
+      pr.pattern.lastIndex = 0
+      for (let m = pr.pattern.exec(raw); m; m = pr.pattern.exec(raw)) {
+        if (m[0] === '') {
+          pr.pattern.lastIndex++
+          continue
+        }
+        found.push({ at: m.index, end: m.index + m[0].length, p })
+      }
+    })
+    if (found.length === 0) return escapeHtml(raw)
+    found.sort((a, b) => a.at - b.at || a.p - b.p)
+    let out = ''
+    let pos = 0
+    for (const f of found) {
+      if (f.at < pos) continue
+      const text = raw.slice(f.at, f.end)
+      out += escapeHtml(raw.slice(pos, f.at)) + `<span class="dsk-term-link${this.providers[f.p]!.url ? ' url' : ''}" data-p="${f.p}" data-t="${escapeHtml(text)}">${escapeHtml(text)}</span>`
+      pos = f.end
+    }
+    return out + escapeHtml(raw.slice(pos))
   }
 
   private styleOf(fg: number, bg: number, flags: number): string {
@@ -547,9 +705,23 @@ export class TerminalView {
       this.focus()
       const target = e.target as HTMLElement
       const link = target.closest<HTMLElement>('.dsk-term-link')
-      if (link && (mac ? e.metaKey : e.ctrlKey) && this.o.onLink) {
-        const url = link.dataset.url ?? this.term.links[Number(link.dataset.link)] ?? ''
-        if (url) this.o.onLink(url)
+      if (link && (mac ? e.metaKey : e.ctrlKey)) {
+        if (link.dataset.p !== undefined) this.providers[Number(link.dataset.p)]?.activate(link.dataset.t ?? '', e)
+        else {
+          const url = this.term.links[Number(link.dataset.link)] ?? ''
+          if (url && this.o.onLink) this.o.onLink(url)
+        }
+        return
+      }
+      // A command's mark: its output selected.
+      const mark = target.closest<HTMLElement>('.dsk-term-mark')
+      if (mark) {
+        const c = this.term.commands.find((x) => String(x.prompt) === mark.dataset.prompt)
+        if (c && c.output !== undefined) {
+          this.anchor = { row: c.output, col: 0 }
+          this.head = { row: (c.end ?? this.term.buffer.lines.length + this.term.trimmed) - 1, col: this.term.cols }
+          this.schedule()
+        }
         return
       }
       if (tracking(e)) {
@@ -621,4 +793,26 @@ export class TerminalView {
     void this.element.offsetWidth
     this.element.classList.add('bell')
   }
+}
+
+/** A row's text and, for each of its UTF-16 positions, the column it stands in (one past the end too). */
+function cellsOf(line: Line): { text: string; cols: number[] } {
+  let text = ''
+  const cols: number[] = []
+  const end = line.length()
+  for (let x = 0; x < end; x++) {
+    const w = line.width(x)
+    if (w === 0) continue
+    const ch = line.char(x)
+    for (let k = 0; k < ch.length; k++) cols.push(x)
+    text += ch
+  }
+  cols.push(end)
+  return { text, cols }
+}
+
+function duration(ms: number): string {
+  if (ms < 1000) return `${ms} ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`
+  return `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`
 }
