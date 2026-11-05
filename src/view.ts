@@ -53,6 +53,13 @@ export interface TerminalViewOptions {
   links?: LinkProvider[]
   /** The size changed (`fit`): the pseudo-terminal behind should change too. */
   onResize?: (cols: number, rows: number) => void
+  /**
+   * The most rows one wheel event scrolls (3): a turn of a mouse's wheel, sped
+   * up by the system, or a flick of a trackpad moves the output by rows, not
+   * screens, so a few lines can be read at a time. 0 leaves the wheel to the
+   * browser.
+   */
+  wheelLines?: number
 }
 
 export interface LinkProvider {
@@ -149,7 +156,7 @@ export class TerminalView {
   private readonly input: HTMLTextAreaElement
   private cellW = 8
   private rowH = 16
-  private readonly o: Required<Pick<TerminalViewOptions, 'fontFamily' | 'fontSize' | 'lineHeight'>> & TerminalViewOptions
+  private readonly o: Required<Pick<TerminalViewOptions, 'fontFamily' | 'fontSize' | 'lineHeight' | 'wheelLines'>> & TerminalViewOptions
   private drawn: string[] = []
   private first = -1
   private pending = false
@@ -160,6 +167,8 @@ export class TerminalView {
   private head: Point | null = null
   private selecting = false
   private mouseButton = -1
+  /** Wheel movement short of a row, kept for the next event (a full-screen program takes whole rows). */
+  private wheelRest = 0
   private readonly off: (() => void)[] = []
   private readonly observer: ResizeObserver
 
@@ -169,7 +178,7 @@ export class TerminalView {
     options: TerminalViewOptions = {},
   ) {
     addStyle()
-    this.o = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.25, ...options }
+    this.o = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.25, wheelLines: 3, ...options }
     this.trimmed = term.trimmed
     // Addresses first (when the host opens them), then the host's own kinds of links.
     this.providers = [
@@ -773,12 +782,26 @@ export class TerminalView {
           report('wheel', e.deltaY < 0 ? 0 : 1, e)
           return
         }
-        // A full-screen program has no scrollback: the wheel scrolls it by its arrows.
+        const cap = this.o.wheelLines
+        // The event's movement in pixels, whatever unit it came in.
+        const px = e.deltaMode === 1 ? e.deltaY * this.rowH : e.deltaMode === 2 ? e.deltaY * el.clientHeight : e.deltaY
+        // A full-screen program has no scrollback: the wheel scrolls it by its arrows, one a row.
         if (this.term.buffer === this.term.alt && !e.shiftKey) {
           e.preventDefault()
-          const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / this.rowH))
-          const arrow = e.deltaY < 0 ? 'A' : 'B'
-          this.term.input(`${this.term.applicationCursor ? '\x1bO' : '\x1b['}${arrow}`.repeat(Math.min(lines, 10)))
+          const moved = this.wheelRest + px / this.rowH
+          const whole = Math.trunc(moved)
+          this.wheelRest = moved - whole
+          const lines = cap > 0 ? Math.max(-cap, Math.min(cap, whole)) : Math.max(-10, Math.min(10, whole))
+          if (lines === 0) return
+          const arrow = lines < 0 ? 'A' : 'B'
+          this.term.input(`${this.term.applicationCursor ? '\x1bO' : '\x1b['}${arrow}`.repeat(Math.abs(lines)))
+          return
+        }
+        // The scrollback: by what the wheel says, but never more than `wheelLines` rows at a time.
+        if (cap > 0 && px !== 0) {
+          e.preventDefault()
+          const max = cap * this.rowH
+          el.scrollTop += Math.max(-max, Math.min(max, px))
         }
       },
       { passive: false },

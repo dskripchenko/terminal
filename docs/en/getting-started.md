@@ -73,13 +73,16 @@ new TerminalView(term, host, {
   altIsMeta?,            // Alt sends ESC before the key; off on a Mac by default (Option types characters)
   onLink?: (url) => {},  // a link clicked with Cmd (Ctrl)
   onResize?: (cols, rows) => {},
+  wheelLines?: 3,       // the most rows one wheel event scrolls; 0 leaves the wheel to the browser
 })
 ```
 
 The view fills `host`; its size gives the columns and rows, and changes of
 it are followed (`fit()` does the same by hand). Only the rows in view are in
-the page: the scrollback scrolls natively, and new output keeps the view where
-it is unless it is at the bottom.
+the page: the scrollback scrolls with the wheel by rows — never more than
+`wheelLines` at a time, so a turn of a mouse's wheel sped up by the system
+or a flick of a trackpad moves a few lines, not a screen — and new output
+keeps the view where it is unless it is at the bottom.
 
 | | |
 |---|---|
@@ -101,7 +104,7 @@ browser's.
 row; Shift extends. When a program asks for the mouse (`htop`, `mc`, `vim`
 with `mouse=a`) clicks, drags and the wheel are its — Shift keeps them the
 terminal's. In a full-screen program without mouse reporting the wheel sends
-arrows.
+arrows, one a row, at most `wheelLines` an event.
 
 **Colours** are CSS custom properties on the view's element:
 `--dsk-term-fg`, `--dsk-term-bg`, `--dsk-term-cursor`, `--dsk-term-selection`,

@@ -64,10 +64,11 @@ new TerminalView(term, host, {
   altIsMeta?,            // Alt 在按键前发送 ESC；Mac 上默认关闭（Option 输入字符）
   onLink?: (url) => {},  // 按住 Cmd（Ctrl）点击的链接
   onResize?: (cols, rows) => {},
+  wheelLines?: 3,       // 一次滚轮事件最多滚动的行数；0 表示滚轮交给浏览器
 })
 ```
 
-视图填满 `host`；其尺寸决定列数和行数，并会跟随变化（`fit()` 手动完成同样的事）。页面中只有可见的行：回滚区原生滚动，若视图不在底部，新输出不会移动视图。
+视图填满 `host`；其尺寸决定列数和行数，并会跟随变化（`fit()` 手动完成同样的事）。页面中只有可见的行：回滚区随滚轮按行滚动——一次最多 `wheelLines` 行，因此被系统加速的一格鼠标滚轮或触控板的一次轻扫只移动几行而不是一屏；若视图不在底部，新输出不会移动视图。
 
 | | |
 |---|---|
@@ -79,7 +80,7 @@ new TerminalView(term, host, {
 
 **按键。** 文本通过隐藏的输入框进入，因此键盘布局和输入法均可用；方向键、Home/End、Page Up/Down、Insert/Delete 和 F1–F12 按 xterm 的方式发送，并带修饰键（Ctrl+→ 为 `ESC [1;5C`）；Ctrl 加字母按按键位置发送控制字符（任何布局下 Ctrl+C 都是 ^C）；开启 `altIsMeta` 时 Alt 在按键前发送 ESC。Mac 上 Cmd+C / Cmd+A、其他系统上 Ctrl+Shift+C / Ctrl+Shift+A 用于复制和全选；粘贴由浏览器完成。
 
-**鼠标。** 拖动选择；双击选择一个词，三击选择一行；Shift 扩展选区。程序请求鼠标时（`htop`、`mc`、设置了 `mouse=a` 的 `vim`），点击、拖动和滚轮都交给程序——按住 Shift 则仍归终端。在没有鼠标报告的全屏程序中，滚轮发送方向键。
+**鼠标。** 拖动选择；双击选择一个词，三击选择一行；Shift 扩展选区。程序请求鼠标时（`htop`、`mc`、设置了 `mouse=a` 的 `vim`），点击、拖动和滚轮都交给程序——按住 Shift 则仍归终端。在没有鼠标报告的全屏程序中，滚轮发送方向键，每行一个，一次事件最多 `wheelLines` 个。
 
 **颜色**是视图元素上的 CSS 自定义属性：`--dsk-term-fg`、`--dsk-term-bg`、`--dsk-term-cursor`、`--dsk-term-selection`、`--dsk-term-0` … `--dsk-term-15`。已提供 `LIGHT_THEME` 和 `DARK_THEME`。
 
