@@ -92,6 +92,36 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.waitForTimeout(100)
     check(`${name}: new output leaves the view where it is`, (await page.locator('.dsk-term-row').first().textContent())?.trim() === 'line 0')
 
+    // The wheel: a turn sped up by the system (300 px) moves three rows, not a screen; a small move is kept as it is.
+    await page.evaluate(() => window.view.scrollToBottom())
+    await page.waitForTimeout(100)
+    const termBox = await page.locator('.dsk-term').boundingBox()
+    await page.mouse.move(termBox.x + 100, termBox.y + 100)
+    const top = () => page.locator('.dsk-term').evaluate((el) => el.scrollTop)
+    const rowH = await page.evaluate(() => window.view['rowH'])
+    let was = await top()
+    await page.mouse.wheel(0, -300)
+    await page.waitForTimeout(100)
+    check(`${name}: a turn of the wheel scrolls three rows at most`, Math.abs(was - (await top()) - rowH * 3) < 1, `${was - (await top())} of ${rowH * 3}`)
+    was = await top()
+    await page.mouse.wheel(0, -8)
+    await page.waitForTimeout(100)
+    check(`${name}: a small move of the wheel is kept`, Math.abs(was - (await top()) - 8) < 1, String(was - (await top())))
+    // A full-screen program: the wheel sends arrows, one a row — short moves added up, a flick capped.
+    await page.evaluate(() => {
+      window.term.write('\x1b[?1049h')
+      window.sent.length = 0
+    })
+    await page.mouse.wheel(0, -6)
+    await page.mouse.wheel(0, -6)
+    await page.waitForTimeout(50)
+    check(`${name}: wheel moves short of a row send nothing yet`, (await page.evaluate(() => window.sent.length)) === 0)
+    await page.mouse.wheel(0, -6)
+    await page.mouse.wheel(0, 400)
+    await page.waitForTimeout(50)
+    check(`${name}: a row's worth sends an arrow, a flick three at most`, (await page.evaluate(() => window.sent.join(''))) === '\x1b[A\x1b[B\x1b[B\x1b[B', JSON.stringify(await page.evaluate(() => window.sent.join(''))))
+    await page.evaluate(() => window.term.write('\x1b[?1049l'))
+
     // Selection with the mouse, copied as text.
     await page.evaluate(() => {
       window.term.reset()

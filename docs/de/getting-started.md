@@ -76,13 +76,16 @@ new TerminalView(term, host, {
   altIsMeta?,            // Alt sendet ESC vor der Taste; auf dem Mac standardmäßig aus (Option tippt Zeichen)
   onLink?: (url) => {},  // ein mit Cmd (Strg) angeklickter Link
   onResize?: (cols, rows) => {},
+  wheelLines?: 3,       // höchstens so viele Zeilen je Radereignis; 0 überlässt das Rad dem Browser
 })
 ```
 
 Die Ansicht füllt `host`; dessen Größe ergibt Spalten und Zeilen, Änderungen
 werden verfolgt (`fit()` tut dasselbe von Hand). Nur die sichtbaren Zeilen
-sind in der Seite: Der Rücklauf scrollt nativ, und neue Ausgabe lässt die
-Ansicht, wo sie ist, außer sie steht ganz unten.
+sind in der Seite: Der Rücklauf scrollt mit dem Rad zeilenweise — nie mehr
+als `wheelLines` auf einmal, sodass eine vom System beschleunigte Raddrehung
+oder ein Wisch auf dem Trackpad ein paar Zeilen bewegt, keinen Bildschirm —
+und neue Ausgabe lässt die Ansicht, wo sie ist, außer sie steht ganz unten.
 
 | | |
 |---|---|
@@ -105,7 +108,8 @@ Browser.
 Dreifachklick eine Zeile; Umschalt erweitert. Fragt ein Programm nach der Maus
 (`htop`, `mc`, `vim` mit `mouse=a`), gehören Klicks, Ziehen und das Rad ihm —
 mit Umschalt bleiben sie beim Terminal. In einem Vollbildprogramm ohne
-Mausberichte sendet das Rad Pfeile.
+Mausberichte sendet das Rad Pfeile, einen je Zeile, höchstens `wheelLines`
+je Ereignis.
 
 **Farben** sind CSS-Eigenschaften am Element der Ansicht: `--dsk-term-fg`,
 `--dsk-term-bg`, `--dsk-term-cursor`, `--dsk-term-selection`,
