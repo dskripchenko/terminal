@@ -134,6 +134,9 @@ function colorCss(c: number, bright: boolean): string | null {
 
 const escapeHtml = (s: string): string => s.replace(/[&<>"]/g, (ch) => (ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;'))
 
+/** The longest a frame of synchronized output (mode 2026) is waited for, in ms. */
+const SYNC_TIMEOUT = 150
+
 /** Web addresses in a row's text, found as a terminal finds them. */
 const URL_RE = /\b(?:https?|ftp|file):\/\/[^\s"'<>`]*[^\s"'<>`.,;:!?)\]}]/g
 
@@ -160,6 +163,8 @@ export class TerminalView {
   private drawn: string[] = []
   private first = -1
   private pending = false
+  /** When the display began waiting for a synchronized frame to end; null when it is not waiting. */
+  private heldSince: number | null = null
   private atBottom = true
   private trimmed: number
   private composing = false
@@ -280,7 +285,7 @@ export class TerminalView {
 
   selectAll(): void {
     this.anchor = { row: this.trimmed, col: 0 }
-    this.head = { row: this.trimmed + this.term.buffer.lines.length - 1, col: this.term.cols }
+    this.head = { row: this.trimmed + this.term.buffer.length - 1, col: this.term.cols }
     this.schedule()
   }
 
@@ -378,20 +383,35 @@ export class TerminalView {
   private schedule(): void {
     if (this.pending) return
     this.pending = true
-    requestAnimationFrame(() => {
-      this.pending = false
-      this.render()
-    })
+    requestAnimationFrame(this.frame)
+  }
+
+  /**
+   * A frame of the display: while the program draws a frame of its own
+   * (synchronized output) it waits, so half a frame is never shown — but not
+   * longer than SYNC_TIMEOUT, in case the end never comes.
+   */
+  private readonly frame = (now: number): void => {
+    if (this.term.synchronized) {
+      this.heldSince ??= now
+      if (now - this.heldSince < SYNC_TIMEOUT) {
+        requestAnimationFrame(this.frame)
+        return
+      }
+    }
+    this.heldSince = null
+    this.pending = false
+    this.render()
   }
 
   private lineAt(row: number): Line | undefined {
-    return this.term.buffer.lines[row - this.term.trimmed]
+    return this.term.buffer.line(row - this.term.trimmed)
   }
 
   private render(): void {
     const term = this.term
     const b = term.buffer
-    const total = b.lines.length
+    const total = b.length
     // The scrollback was cut at the top: what is in view stays in view.
     const cut = term.trimmed - this.trimmed
     this.trimmed = term.trimmed
@@ -416,7 +436,7 @@ export class TerminalView {
     // The rows: replaced only when their markup changed.
     const rowEls = this.rowsEl.querySelectorAll<HTMLElement>(':scope > .dsk-term-row')
     for (let i = 0; i < count; i++) {
-      const html = this.rowHtml(b.lines[top + i]!)
+      const html = this.rowHtml(b.line(top + i)!)
       let el = rowEls[i]
       if (!el) {
         el = document.createElement('div')
@@ -608,7 +628,7 @@ export class TerminalView {
   private cellAt(clientX: number, clientY: number): Point {
     const r = this.rowsEl.getBoundingClientRect()
     const col = Math.max(0, Math.min(this.term.cols, Math.round((clientX - r.left) / this.cellW - 0.25)))
-    const index = Math.max(0, Math.min(this.term.buffer.lines.length - 1, this.first + Math.floor((clientY - r.top) / this.rowH)))
+    const index = Math.max(0, Math.min(this.term.buffer.length - 1, this.first + Math.floor((clientY - r.top) / this.rowH)))
     return { row: index + this.term.trimmed, col }
   }
 
@@ -728,7 +748,7 @@ export class TerminalView {
         const c = this.term.commands.find((x) => String(x.prompt) === mark.dataset.prompt)
         if (c && c.output !== undefined) {
           this.anchor = { row: c.output, col: 0 }
-          this.head = { row: (c.end ?? this.term.buffer.lines.length + this.term.trimmed) - 1, col: this.term.cols }
+          this.head = { row: (c.end ?? this.term.buffer.length + this.term.trimmed) - 1, col: this.term.cols }
           this.schedule()
         }
         return

@@ -37,12 +37,14 @@ dim, italic, underline (single, double, curly), blinking, inverse, hidden,
 strike-through, overline; the alternate screen (`1049`) and saving the cursor;
 the DEC line-drawing set; origin mode, autowrap, insert mode; the application
 cursor and keypad; bracketed paste; mouse reporting (`1000`/`1002`/`1003`,
-SGR `1006`); focus events; answers to the cursor position, device attributes,
-the size and the colours; the title (OSC 0/2), the working folder (OSC 7),
+SGR `1006`); focus events; synchronized output (`2026`): a frame shown whole,
+when the program ends it; answers to the cursor position, device attributes,
+the size, the colours and whether a mode is set (DECRQM); the title (OSC 0/2), the working folder (OSC 7),
 hyperlinks (OSC 8) and shell integration marks (OSC 133).
 
 **What it draws.** Only the rows in view — a scrollback of thousands of rows
-costs what a screen costs; rows of the normal screen wrapped again when the
+costs what a screen costs, and a line of output costs the same with a long
+scrollback as with a short one; rows of the normal screen wrapped again when the
 width changes; the cursor as a block, an underline or a bar, blinking or not;
 a selection with the mouse (a word on a double click, a row on a triple) and
 copying it; links opened with Cmd (Ctrl) and a click.
