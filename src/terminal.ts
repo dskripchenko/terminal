@@ -153,6 +153,9 @@ export class Terminal implements ParserHandler {
   newlineMode = false
   applicationCursor = false
   applicationKeypad = false
+  /** The kitty keyboard protocol's flags, a stack for each screen (only "disambiguate", 1, is kept). */
+  private kittyMain: number[] = []
+  private kittyAlt: number[] = []
   originMode = false
   autowrap = true
   cursorVisible = true
@@ -284,6 +287,8 @@ export class Terminal implements ParserHandler {
     for (let i = 0; i < this.rows; i++) this.normal.lines.push(new Line(this.cols))
     this.alt = new ScreenBuffer(this.cols, this.rows, false)
     this.buffer = this.normal
+    this.kittyMain = []
+    this.kittyAlt = []
     this.commands = []
     for (const b of [this.normal, this.alt]) {
       b.x = b.y = 0
@@ -324,6 +329,35 @@ export class Terminal implements ParserHandler {
   private resetTabs(): void {
     this.tabs = new Set()
     for (let x = 8; x < this.cols; x += 8) this.tabs.add(x)
+  }
+
+  /** The kitty keyboard flags in force on this screen. */
+  get kittyFlags(): number {
+    const stack = this.buffer === this.alt ? this.kittyAlt : this.kittyMain
+    return stack.at(-1) ?? 0
+  }
+
+  /** `CSI ? u` asks, `CSI > f u` pushes, `CSI < n u` pops, `CSI = f ; m u` sets (1), adds (2) or takes away (3). */
+  private kittyKeyboard(prefix: string, params: number[][]): void {
+    const stack = this.buffer === this.alt ? this.kittyAlt : this.kittyMain
+    const v = (i: number, def: number): number => {
+      const x = params[i]?.[0] ?? -1
+      return x < 0 ? def : x
+    }
+    const SUPPORTED = 1
+    if (prefix === '?') this.reply(`\x1b[?${this.kittyFlags}u`)
+    else if (prefix === '>') {
+      stack.push(v(0, 0) & SUPPORTED)
+      if (stack.length > 32) stack.shift()
+    } else if (prefix === '<') stack.splice(Math.max(0, stack.length - Math.max(1, v(0, 1))))
+    else if (prefix === '=') {
+      const flags = v(0, 0) & SUPPORTED
+      const mode = v(1, 1)
+      const now = stack.at(-1) ?? 0
+      const next = mode === 2 ? now | flags : mode === 3 ? now & ~flags : flags
+      if (stack.length) stack[stack.length - 1] = next
+      else stack.push(next)
+    }
   }
 
   private reply(data: string): void {
@@ -564,6 +598,7 @@ export class Terminal implements ParserHandler {
       return
     }
     if (intermediates !== '') return
+    if (final === 'u' && prefix !== '') return this.kittyKeyboard(prefix, params)
     if (prefix === '?') {
       if (final === 'h' || final === 'l') for (const prm of params) this.privateMode(prm[0]!, final === 'h')
       else if (final === 'n' && raw(0) === 6) this.reply(`\x1b[?${b.y + 1 - (this.originMode ? b.top : 0)};${b.x + 1}R`)
@@ -866,6 +901,8 @@ export class Terminal implements ParserHandler {
     if (alt) {
       if (withCursor) this.saveCursor()
       this.alt = new ScreenBuffer(this.cols, this.rows, false)
+      // A new alternate screen starts with no keyboard flags of a program before.
+      this.kittyAlt = []
       this.alt.x = this.normal.x
       this.alt.y = this.normal.y
       this.buffer = this.alt

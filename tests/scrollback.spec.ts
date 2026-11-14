@@ -73,4 +73,27 @@ describe('synchronized output (mode 2026)', () => {
     t.write('\x1b[?2026$p\x1b[?2026h\x1b[?2026$p\x1b[?2004$p\x1b[?25$p\x1b[?1049h\x1b[?1049$p\x1b[?4242$p')
     expect(replies).toEqual(['\x1b[?2026;2$y', '\x1b[?2026;1$y', '\x1b[?2004;2$y', '\x1b[?25;1$y', '\x1b[?1049;1$y', '\x1b[?4242;0$y'])
   })
+
+  it('the kitty keyboard flags: asked, pushed, popped, set — a stack for each screen, only "disambiguate" kept', () => {
+    const t = new Terminal()
+    const replies: string[] = []
+    t.onData((d) => replies.push(d))
+    t.write('\x1b[?u')
+    t.write('\x1b[>3u\x1b[?u')
+    expect(t.kittyFlags).toBe(1)
+    // The alternate screen has its own, empty at first.
+    t.write('\x1b[?1049h\x1b[?u')
+    expect(t.kittyFlags).toBe(0)
+    t.write('\x1b[=1;1u')
+    expect(t.kittyFlags).toBe(1)
+    t.write('\x1b[=1;3u')
+    expect(t.kittyFlags).toBe(0)
+    t.write('\x1b[?1049l')
+    expect(t.kittyFlags).toBe(1)
+    t.write('\x1b[<u\x1b[?u')
+    expect(replies).toEqual(['\x1b[?0u', '\x1b[?1u', '\x1b[?0u', '\x1b[?0u'])
+    // A plain CSI u is still the cursor restored, and a reset clears the flags.
+    t.write('\x1b[>1u\x1bc')
+    expect(t.kittyFlags).toBe(0)
+  })
 })

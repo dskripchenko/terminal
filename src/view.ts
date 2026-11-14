@@ -684,7 +684,7 @@ export class TerminalView {
         this.selectAll()
         return
       }
-      const seq = keySequence(e, { applicationCursor: this.term.applicationCursor, altIsMeta: this.o.altIsMeta ?? !mac })
+      const seq = keySequence(e, { applicationCursor: this.term.applicationCursor, altIsMeta: this.o.altIsMeta ?? !mac, kittyFlags: this.term.kittyFlags })
       if (seq === null) return
       e.preventDefault()
       this.send(seq)
