@@ -47,11 +47,11 @@ new Terminal({ cols?: 80, rows?: 24, scrollback?: 1000, foreground?: '#000000', 
 | `onMark(fn)` | shell 集成（OSC 133）：`A` 提示符开始，`B`/`C` 命令，`D` 命令结束——附带所在行 |
 | `onChange(fn)` | 屏幕上有内容变化 |
 | `screenText()`、`lineText(i)` | 以文本形式获取屏幕或缓冲区中的一行 |
-| `buffer` | 当前屏幕：`lines`（回滚区和屏幕）、`x`、`y`、`base`（屏幕首行在 `lines` 中的位置） |
+| `buffer` | 当前屏幕：`lines`（回滚区和屏幕）、`x`、`y`、`base`（屏幕首行在 `lines` 中的位置）、`length` 和 `line(i)`（不复制 `lines` 即取一行） |
 | `normal`、`alt` | 两个屏幕；全屏程序运行时 `buffer === alt` |
 | `trimmed` | 迄今从回滚区顶部丢弃的行数：绝对行号随之移动 |
 
-程序设置的模式也可以读取：`applicationCursor`、`bracketedPaste`、`mouseTracking`、`cursorVisible`、`cursorStyle`、`reverseVideo` 等。
+程序设置的模式也可以读取：`applicationCursor`、`bracketedPaste`、`mouseTracking`、`cursorVisible`、`cursorStyle`、`reverseVideo`、`synchronized`（程序正在绘制同步输出的一帧：视图等待其结束，最多 150 毫秒）等。
 
 一行（`Line`）为每个单元格提供 `char(x)`、`width(x)`（宽字符右半部分为 0）、`fg(x)`、`bg(x)`（0 为默认，`PALETTE | n`、`RGB | 0xrrggbb`）和 `flags(x)`（`BOLD`、`ITALIC`、`UNDERLINE`……；链接编号从第 16 位开始，地址在 `terminal.links` 中），以及 `text()`；`wrapped` 表示该行在下一行继续。
 

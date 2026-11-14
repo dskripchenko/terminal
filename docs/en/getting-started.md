@@ -51,12 +51,14 @@ colours (OSC 10/11: `vim` does, to choose a light or dark scheme).
 | `onMark(fn)` | shell integration (OSC 133): `A` a prompt starts, `B`/`C` a command, `D` it ended — with the row |
 | `onChange(fn)` | something on the screen changed |
 | `screenText()`, `lineText(i)` | the screen, or a row of the buffer, as text |
-| `buffer` | the active screen: `lines` (the scrollback and the screen), `x`, `y`, `base` (the screen's first row among `lines`) |
+| `buffer` | the active screen: `lines` (the scrollback and the screen), `x`, `y`, `base` (the screen's first row among `lines`), `length` and `line(i)` (a row without copying `lines`) |
 | `normal`, `alt` | the two screens; `buffer === alt` while a full-screen program runs |
 | `trimmed` | rows dropped from the top of the scrollback so far: absolute row numbers move by it |
 
 Modes a program set are readable too: `applicationCursor`, `bracketedPaste`,
-`mouseTracking`, `cursorVisible`, `cursorStyle`, `reverseVideo` and others.
+`mouseTracking`, `cursorVisible`, `cursorStyle`, `reverseVideo`, `synchronized`
+(a frame of synchronized output is being drawn: the view waits for its end, at
+most 150 ms) and others.
 
 A row (`Line`) gives each cell's `char(x)`, `width(x)` (0 for the right half
 of a wide character), `fg(x)`, `bg(x)` (0 the default, `PALETTE | n`,

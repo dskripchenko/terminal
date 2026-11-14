@@ -223,6 +223,18 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     const scroll = await page.locator('.dsk-term').evaluate((el) => [el.scrollTop, el.scrollHeight, el.clientHeight])
     check(`${name}: a full-screen program after long output: its screen in view`, scroll[1] <= scroll[2] + 2 && (await page.locator('.dsk-term-row', { hasText: 'F1Help' }).isVisible()), scroll.join(','))
     await page.screenshot({ path: join(output, `${name}-htop-dark.png`) })
+    // Synchronized output (2026): a frame shown when it ends, not half of it before; and not held for ever.
+    const shown = (text) => page.evaluate((t) => [...document.querySelectorAll('.dsk-term-row')].some((r) => r.textContent.includes(t)), text)
+    await page.evaluate(() => window.term.write('\x1bc\x1b[?2026hframe-half'))
+    await page.waitForTimeout(60)
+    const half = await shown('frame-half')
+    await page.evaluate(() => window.term.write(' frame-whole\x1b[?2026l'))
+    await page.waitForTimeout(60)
+    check(`${name}: a synchronized frame is shown whole, when it ends`, !half && (await shown('frame-half frame-whole')), `half shown: ${half}`)
+    await page.evaluate(() => window.term.write('\r\n\x1b[?2026hframe-never-ended'))
+    await page.waitForTimeout(400)
+    check(`${name}: a synchronized frame that never ends is shown after the timeout`, await shown('frame-never-ended'))
+    await page.evaluate(() => window.term.write('\x1b[?2026l'))
     check(`${name}: no errors`, errors.length === 0, errors.join('; '))
   } catch (e) {
     check(`${name}: ran to the end`, false, String(e).split('\n')[0])

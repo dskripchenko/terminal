@@ -57,7 +57,14 @@ interface Saved {
 
 /** A screen's rows (the normal one with its scrollback, or the alternate) and its cursor. */
 export class ScreenBuffer {
-  lines: Line[] = []
+  /**
+   * The rows from `head` on, the scrollback first. Rows cut from the top of a
+   * full scrollback only move `head`; the array is copied once `head` reaches
+   * the number of rows kept, so a line of output costs the same with a
+   * scrollback of a thousand rows or of a hundred thousand.
+   */
+  private store: Line[] = []
+  private head = 0
   x = 0
   y = 0
   top = 0
@@ -70,17 +77,55 @@ export class ScreenBuffer {
     readonly scrollback: boolean,
   ) {
     this.bottom = rows - 1
-    for (let i = 0; i < rows; i++) this.lines.push(new Line(cols))
+    for (let i = 0; i < rows; i++) this.store.push(new Line(cols))
+  }
+
+  /** All the rows, the scrollback first, as an array of their own (for edits and reading many). */
+  get lines(): Line[] {
+    this.compact()
+    return this.store
+  }
+
+  set lines(rows: Line[]) {
+    this.store = rows
+    this.head = 0
+  }
+
+  /** How many rows there are, the scrollback included. */
+  get length(): number {
+    return this.store.length - this.head
+  }
+
+  /** A row by its index among all of them (the scrollback first). */
+  line(index: number): Line | undefined {
+    return index >= 0 && index < this.length ? this.store[this.head + index] : undefined
+  }
+
+  /** A row added at the bottom. */
+  append(line: Line): void {
+    this.store.push(line)
+  }
+
+  /** The first `n` rows dropped. */
+  dropTop(n: number): void {
+    this.head += Math.min(n, this.length)
+    if (this.head >= 1024 && this.head >= this.length) this.compact()
   }
 
   /** Index of the screen's first row among `lines`. */
   get base(): number {
-    return this.lines.length - this.rows
+    return this.length - this.rows
   }
 
   /** A row of the screen (0 at its top). */
   row(y: number): Line {
-    return this.lines[this.base + y]!
+    return this.store[this.head + this.base + y]!
+  }
+
+  private compact(): void {
+    if (this.head === 0) return
+    this.store = this.store.slice(this.head)
+    this.head = 0
   }
 }
 
@@ -118,6 +163,11 @@ export class Terminal implements ParserHandler {
   mouseSgr = false
   focusEvents = false
   reverseVideo = false
+  /**
+   * Synchronized output (mode 2026): the program is drawing a frame and asks
+   * that it be shown whole, when it ends; a view waits for that (or a timeout).
+   */
+  synchronized = false
   title = ''
   /** The program's working folder, when its shell says (OSC 7). */
   cwd: string | null = null
@@ -216,7 +266,7 @@ export class Terminal implements ParserHandler {
 
   /** The text of a row (an absolute index into the buffer, scrollback included). */
   lineText(index: number): string {
-    return this.buffer.lines[index]?.text() ?? ''
+    return this.buffer.line(index)?.text() ?? ''
   }
 
   /** The screen as text, a row per line (for tests and for copying). */
@@ -263,6 +313,7 @@ export class Terminal implements ParserHandler {
     this.autowrap = true
     this.cursorVisible = true
     this.bracketedPaste = false
+    this.synchronized = false
     this.charsets = ['B', 'B']
     this.shift = 0
     this.link = 0
@@ -503,6 +554,13 @@ export class Terminal implements ParserHandler {
     }
     if (intermediates === '!' && final === 'p') {
       this.softReset()
+      return
+    }
+    // DECRQM for a private mode: whether it is set (1), reset (2), or not known (0).
+    if (intermediates === '$' && prefix === '?' && final === 'p') {
+      const mode = raw(0)
+      const state = this.privateModeState(mode)
+      this.reply(`\x1b[?${mode};${state === null ? 0 : state ? 1 : 2}$y`)
       return
     }
     if (intermediates !== '') return
@@ -746,6 +804,9 @@ export class Terminal implements ParserHandler {
       case 2004:
         this.bracketedPaste = on
         break
+      case 2026:
+        this.synchronized = on
+        break
       case 47:
       case 1047:
         this.switchBuffer(on, false)
@@ -757,6 +818,45 @@ export class Terminal implements ParserHandler {
       case 1049:
         this.switchBuffer(on, true)
         break
+    }
+  }
+
+  /** A private mode's state, for DECRQM; null for a mode not known. */
+  private privateModeState(mode: number): boolean | null {
+    switch (mode) {
+      case 1:
+        return this.applicationCursor
+      case 5:
+        return this.reverseVideo
+      case 6:
+        return this.originMode
+      case 7:
+        return this.autowrap
+      case 12:
+        return this.cursorBlink
+      case 25:
+        return this.cursorVisible
+      case 9:
+      case 1000:
+        return this.mouseTracking === 'click'
+      case 1002:
+        return this.mouseTracking === 'drag'
+      case 1003:
+        return this.mouseTracking === 'any'
+      case 1004:
+        return this.focusEvents
+      case 1006:
+        return this.mouseSgr
+      case 47:
+      case 1047:
+      case 1049:
+        return this.buffer === this.alt
+      case 2004:
+        return this.bracketedPaste
+      case 2026:
+        return this.synchronized
+      default:
+        return null
     }
   }
 
@@ -912,10 +1012,10 @@ export class Terminal implements ParserHandler {
     if (n <= 0) return
     const blank = (): Line => new Line(this.cols, this.eraseAttr())
     if (keep && b.scrollback && at === 0 && b.top === 0 && b.bottom === this.rows - 1) {
-      for (let i = 0; i < n; i++) b.lines.push(blank())
-      const extra = b.lines.length - this.rows - this.maxScrollback
+      for (let i = 0; i < n; i++) b.append(blank())
+      const extra = b.length - this.rows - this.maxScrollback
       if (extra > 0) {
-        b.lines.splice(0, extra)
+        b.dropTop(extra)
         this.trimmed += extra
         if (this.commands.length && this.commands[0]!.prompt < this.trimmed) this.commands = this.commands.filter((c) => c.prompt >= this.trimmed)
       }

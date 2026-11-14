@@ -52,13 +52,14 @@ fragt (OSC 10/11: `vim` tut das, um ein helles oder dunkles Schema zu wählen).
 | `onMark(fn)` | Shell-Integration (OSC 133): `A` eine Eingabeaufforderung beginnt, `B`/`C` ein Befehl, `D` er endete — mit der Zeile |
 | `onChange(fn)` | etwas auf dem Bildschirm hat sich geändert |
 | `screenText()`, `lineText(i)` | der Bildschirm oder eine Zeile des Puffers als Text |
-| `buffer` | der aktive Bildschirm: `lines` (Rücklauf und Bildschirm), `x`, `y`, `base` (die erste Bildschirmzeile in `lines`) |
+| `buffer` | der aktive Bildschirm: `lines` (Rücklauf und Bildschirm), `x`, `y`, `base` (die erste Bildschirmzeile in `lines`), `length` und `line(i)` (eine Zeile, ohne `lines` zu kopieren) |
 | `normal`, `alt` | die zwei Bildschirme; `buffer === alt`, solange ein Vollbildprogramm läuft |
 | `trimmed` | bisher oben aus dem Rücklauf entfernte Zeilen: Um so viel verschieben sich absolute Zeilennummern |
 
 Auch die von einem Programm gesetzten Modi sind lesbar: `applicationCursor`,
 `bracketedPaste`, `mouseTracking`, `cursorVisible`, `cursorStyle`,
-`reverseVideo` und weitere.
+`reverseVideo`, `synchronized` (das Programm zeichnet ein Bild der
+synchronisierten Ausgabe: die Ansicht wartet auf sein Ende, höchstens 150 ms) und weitere.
 
 Eine Zeile (`Line`) liefert für jede Zelle `char(x)`, `width(x)` (0 für die
 rechte Hälfte eines breiten Zeichens), `fg(x)`, `bg(x)` (0 der Standard,
