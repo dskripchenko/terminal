@@ -218,6 +218,14 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     check(`${name}: a mark for each command, by how it ended`, marks.length === 3 && marks[0].startsWith('fail:make · exit 2') && marks[1].startsWith('ok:ls · exit 0') && marks[2].startsWith('running:sleep 9'), JSON.stringify(marks))
     await page.locator('.dsk-term-mark.fail').click()
     check(`${name}: a click on a mark selects the command's output`, (await page.evaluate(() => window.view.getSelection())) === 'src/main.ts:12 error\nmore', JSON.stringify(await page.evaluate(() => window.view.getSelection())))
+    // The host hears of the block: its command and its output as text.
+    const block = await page.evaluate(() => window.blocks.at(-1))
+    check(`${name}: a block's command and output for the host`, block?.command === 'make' && block?.output === 'src/main.ts:12 error\nmore', JSON.stringify(block))
+    // With nothing selected (a selection keeps the page's own menu, to copy it).
+    await page.evaluate(() => window.view.clearSelection())
+    await page.locator('.dsk-term-row', { hasText: 'a b' }).click({ button: 'right' })
+    const right = await page.evaluate(() => window.blocks.at(-1))
+    check(`${name}: a right click in a block's output`, right?.command === 'ls' && right?.output === 'a b', JSON.stringify(right))
     await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control')
     await page.locator('.dsk-term-link', { hasText: 'src/main.ts:12' }).click()
     await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control')

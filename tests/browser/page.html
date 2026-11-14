@@ -12,11 +12,13 @@
     window.sent = []
     window.resized = []
     window.links = []
+    window.blocks = []
     term.onData((d) => window.sent.push(d))
     const view = new TerminalView(term, document.getElementById('box'), {
       onResize: (c, r) => window.resized.push([c, r]),
       onLink: (url) => window.links.push(url),
       links: [{ pattern: /[\w.\-/]+\.\w+:\d+/g, activate: (text) => window.links.push('path:' + text) }],
+      onCommand: (c) => window.blocks.push(view.commandText(c)),
       theme: new URLSearchParams(location.search).has('dark') ? DARK_THEME : LIGHT_THEME,
     })
     window.term = term
