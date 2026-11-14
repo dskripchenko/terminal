@@ -409,6 +409,9 @@ export class TerminalView {
   }
 
   private render(): void {
+    // Not in a page (made before it is put in one, or taken out while hidden): nothing to measure
+    // or draw against. The resize observer draws it when it is put back.
+    if (!this.element.isConnected) return
     const term = this.term
     const b = term.buffer
     const total = b.length
@@ -670,12 +673,13 @@ export class TerminalView {
 
     add(input, 'keydown', (e) => {
       if (this.composing || e.isComposing) return
-      const copyKey = mac ? e.metaKey && e.key === 'c' : e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')
+      // By the key's place, not its letter: the same keys copy on a Russian layout (where C types «с»).
+      const copyKey = mac ? e.metaKey && e.code === 'KeyC' : e.ctrlKey && e.shiftKey && e.code === 'KeyC'
       if (copyKey) {
         if (this.copy()) e.preventDefault()
         return
       }
-      if (mac ? e.metaKey && e.key === 'a' : e.ctrlKey && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+      if (mac ? e.metaKey && e.code === 'KeyA' : e.ctrlKey && e.shiftKey && e.code === 'KeyA') {
         e.preventDefault()
         this.selectAll()
         return
