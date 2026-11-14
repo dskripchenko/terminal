@@ -140,6 +140,38 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.mouse.dblclick(box.x + cw * 7.5, box.y + 5)
     check(`${name}: a word by a double click`, (await page.evaluate(() => window.view.getSelection())) === 'world')
 
+    // Copy and select all by the key's place: on a Russian layout C types «с» and A types «ф».
+    const byPlace = (key, code) =>
+      page.evaluate(([key, code]) => {
+        const mac = /Mac/.test(window.navigator.platform)
+        window.sent.length = 0
+        const e = new window.KeyboardEvent('keydown', { key, code, metaKey: mac, ctrlKey: !mac, shiftKey: !mac, bubbles: true, cancelable: true })
+        document.querySelector('.dsk-term-input').dispatchEvent(e)
+        return { prevented: e.defaultPrevented, sent: window.sent.join('') }
+      }, [key, code])
+    const copied = await byPlace('с', 'KeyC')
+    check(`${name}: copy on a Russian layout`, copied.prevented && copied.sent === '', JSON.stringify(copied))
+    await byPlace('ф', 'KeyA')
+    check(`${name}: select all on a Russian layout`, (await page.evaluate(() => window.view.getSelection())).includes('hello world'))
+
+    // A view made before its element is in the page (a hidden tab's) draws once it is put there.
+    const late = await page.evaluate(async () => {
+      const { Terminal, TerminalView } = await import('/dist/index.mjs')
+      const term = new Terminal({ cols: 40, rows: 5 })
+      const host = document.createElement('div')
+      host.style.cssText = 'width: 400px; height: 120px'
+      const view = new TerminalView(term, host)
+      term.write('made in the dark')
+      await new Promise((r) => window.requestAnimationFrame(() => window.requestAnimationFrame(r)))
+      document.body.append(host)
+      await new Promise((r) => setTimeout(r, 150))
+      const text = host.querySelector('.dsk-term-row')?.textContent ?? ''
+      view.dispose()
+      host.remove()
+      return text
+    })
+    check(`${name}: a view made detached draws when attached`, late.startsWith('made in the dark'), JSON.stringify(late))
+
     // Pasting: bracketed when asked.
     await page.evaluate(() => {
       window.term.write('\x1b[?2004h')
