@@ -7,6 +7,7 @@
  */
 import { BLINK, BOLD, CURLY_UNDERLINE, DEFAULT_ATTR, DIM, DOUBLE_UNDERLINE, HIDDEN, INVERSE, ITALIC, Line, LINK_SHIFT, OVERLINE, PALETTE, RGB, STRIKE, UNDERLINE, type Attr } from './line'
 import { Parser, type ParserHandler } from './parser'
+import { decodeSixel, kittySource, readKitty, type KittyCommand, type Picture, type PictureSource } from './pictures'
 import { charWidth } from './width'
 
 export interface TerminalOptions {
@@ -156,6 +157,17 @@ export class Terminal implements ParserHandler {
   /** The kitty keyboard protocol's flags, a stack for each screen (only "disambiguate", 1, is kept). */
   private kittyMain: number[] = []
   private kittyAlt: number[] = []
+
+  /** Pictures in the output (sixel, the kitty graphics protocol), each screen its own. */
+  pictures: Picture[] = []
+  altPictures: Picture[] = []
+  /** A cell's size in pixels, as the view draws it: what a picture covers, what a program is told. */
+  cellPixels = { width: 8, height: 16 }
+  private pictureSeq = 0
+  /** Pictures sent by the kitty protocol to be shown later (`a=t`, then `a=p`), by id. */
+  private kittyStored = new Map<number, { source: PictureSource; width: number; height: number }>()
+  /** A kitty transmission in pieces (`m=1`): the first piece's keys, the payload so far. */
+  private kittyPending: { cmd: KittyCommand; parts: string[]; size: number } | null = null
   originMode = false
   autowrap = true
   cursorVisible = true
@@ -289,6 +301,10 @@ export class Terminal implements ParserHandler {
     this.buffer = this.normal
     this.kittyMain = []
     this.kittyAlt = []
+    this.pictures = []
+    this.altPictures = []
+    this.kittyStored.clear()
+    this.kittyPending = null
     this.commands = []
     for (const b of [this.normal, this.alt]) {
       b.x = b.y = 0
@@ -358,6 +374,121 @@ export class Terminal implements ParserHandler {
       if (stack.length) stack[stack.length - 1] = next
       else stack.push(next)
     }
+  }
+
+  /** The pictures of the screen in view. */
+  get screenPictures(): Picture[] {
+    return this.buffer === this.alt ? this.altPictures : this.pictures
+  }
+
+  /** The view's cell size in pixels (it measured its font). */
+  setCellPixels(width: number, height: number): void {
+    if (width > 0 && height > 0) this.cellPixels = { width: Math.round(width), height: Math.round(height) }
+  }
+
+  /** A device control string: a sixel picture (`…q…`); others are passed over. */
+  dcs(data: string): void {
+    if (!/^[\d;]*q/.test(data)) return
+    const d = decodeSixel(data)
+    if (!d) return
+    // The cursor goes below the picture, to the first column (as xterm does).
+    this.placePicture({ kind: 'rgba', width: d.width, height: d.height, data: d.data }, d.width, d.height, 0, 0, 'below')
+  }
+
+  /** An application program command: the kitty graphics protocol (`G…`). */
+  apc(data: string): void {
+    let cmd = readKitty(data)
+    if (!cmd) return
+    // Pieces of one transmission: the first one's keys, the payloads joined.
+    if (this.kittyPending) {
+      const p = this.kittyPending
+      p.parts.push(cmd.payload)
+      p.size += cmd.payload.length
+      if (p.size > 48 << 20) {
+        this.kittyPending = null
+        return this.kittyReply(p.cmd, 'EFBIG:too big')
+      }
+      if (cmd.more) return
+      this.kittyPending = null
+      cmd = { ...p.cmd, payload: p.parts.join(''), more: false }
+    } else if (cmd.more) {
+      this.kittyPending = { cmd, parts: [cmd.payload], size: cmd.payload.length }
+      return
+    }
+    this.kittyCommand(cmd)
+  }
+
+  private kittyCommand(cmd: KittyCommand): void {
+    if (cmd.action === 'd') {
+      const byId = cmd.what === 'i' || cmd.what === 'I'
+      const keep = (p: Picture) => (byId ? p.kittyId !== cmd.id : false)
+      this.pictures = this.pictures.filter(keep)
+      this.altPictures = this.altPictures.filter(keep)
+      if (byId && cmd.what === 'I') this.kittyStored.delete(cmd.id)
+      for (const l of this.changeListeners) l()
+      return
+    }
+    if (cmd.action === 'p') {
+      const stored = this.kittyStored.get(cmd.id)
+      if (!stored) return this.kittyReply(cmd, 'ENOENT:no such image')
+      this.placePicture(stored.source, stored.width, stored.height, cmd.cols, cmd.rows, cmd.stay ? 'stay' : 'after', cmd.id)
+      return this.kittyReply(cmd, 'OK')
+    }
+    if (!['t', 'T', 'q'].includes(cmd.action)) return
+    // Only what comes in the stream: never a file or shared memory named by a program.
+    if (cmd.medium !== 'd') return this.kittyReply(cmd, 'ENOTSUPPORTED:only direct transmission')
+    if (cmd.compressed) return this.kittyReply(cmd, 'ENOTSUPPORTED:compression')
+    const got = kittySource(cmd.format, cmd.width, cmd.height, cmd.payload)
+    if ('error' in got) return this.kittyReply(cmd, got.error)
+    if (cmd.action === 'q') return this.kittyReply(cmd, 'OK')
+    if (cmd.id) {
+      this.kittyStored.set(cmd.id, got)
+      // Not too many kept: the oldest go.
+      if (this.kittyStored.size > 64) this.kittyStored.delete(this.kittyStored.keys().next().value!)
+    }
+    if (cmd.action === 'T') this.placePicture(got.source, got.width, got.height, cmd.cols, cmd.rows, cmd.stay ? 'stay' : 'after', cmd.id || undefined)
+    this.kittyReply(cmd, 'OK')
+  }
+
+  /** The protocol's answer, when the program gave an id and did not ask for quiet. */
+  private kittyReply(cmd: KittyCommand, message: string): void {
+    if (!cmd.id) return
+    const ok = message === 'OK'
+    if ((ok && cmd.quiet >= 1) || (!ok && cmd.quiet >= 2)) return
+    this.reply(`\x1b_Gi=${cmd.id};${message}\x1b\\`)
+  }
+
+  /**
+   * A picture at the cursor, over the cells its size takes (or those asked);
+   * the cursor after it: on its last row past its right edge (kitty), below it
+   * (sixel), or where it was.
+   */
+  private placePicture(source: PictureSource, width: number, height: number, cols: number, rows: number, cursor: 'after' | 'below' | 'stay', kittyId?: number): void {
+    const b = this.buffer
+    const cw = this.cellPixels.width
+    const ch = this.cellPixels.height
+    const c = Math.max(1, Math.min(cols || Math.ceil(width / cw), this.cols))
+    const r = Math.max(1, Math.min(rows || Math.ceil(height / ch), 1000))
+    const pictures = b === this.alt ? this.altPictures : this.pictures
+    const x0 = b.x
+    const top = b.y
+    // Room for it: the screen scrolls first when it does not fit below the cursor.
+    if (cursor !== 'stay') for (let i = 1; i < r; i++) this.lineFeed()
+    const firstRow = b === this.alt ? b.y - (r - 1) : b.base + b.y - (r - 1) + this.trimmed
+    const at = cursor === 'stay' ? (b === this.alt ? top : b.base + top + this.trimmed) : firstRow
+    pictures.push({ id: ++this.pictureSeq, row: at, col: x0, cols: c, rows: r, width, height, source, ...(kittyId ? { kittyId } : {}) })
+    if (pictures.length > 256) pictures.splice(0, pictures.length - 256)
+    if (cursor === 'after') b.x = Math.min(x0 + c, this.cols - 1)
+    else if (cursor === 'below') {
+      this.lineFeed()
+      b.x = 0
+    }
+    this.wrapNext = false
+  }
+
+  /** Pictures above the rows kept (cut from the top with the scrollback) go too. */
+  private dropPicturesAbove(row: number): void {
+    if (this.pictures.length && this.pictures[0]!.row < row) this.pictures = this.pictures.filter((p) => p.row + p.rows > row)
   }
 
   private reply(data: string): void {
@@ -599,6 +730,14 @@ export class Terminal implements ParserHandler {
     }
     if (intermediates !== '') return
     if (final === 'u' && prefix !== '') return this.kittyKeyboard(prefix, params)
+    if (prefix === '?' && final === 'S') {
+      // XTSMGRAPHICS: the colour registers (1) and the biggest picture (2), read only.
+      const item = raw(0)
+      if (item === 1) this.reply('\x1b[?1;0;1024S')
+      else if (item === 2) this.reply('\x1b[?2;0;4096;4096S')
+      else this.reply(`\x1b[?${item};1;0S`)
+      return
+    }
     if (prefix === '?') {
       if (final === 'h' || final === 'l') for (const prm of params) this.privateMode(prm[0]!, final === 'h')
       else if (final === 'n' && raw(0) === 6) this.reply(`\x1b[?${b.y + 1 - (this.originMode ? b.top : 0)};${b.x + 1}R`)
@@ -689,7 +828,8 @@ export class Terminal implements ParserHandler {
         if (this.lastChar) this.print(this.lastChar.repeat(Math.min(p(0, 1), 0xffff)))
         break
       case 'c':
-        if (raw(0) <= 0) this.reply('\x1b[?1;2c')
+        // A VT220 with sixel pictures (4) and colours (22): programs look for 4 before they draw.
+        if (raw(0) <= 0) this.reply('\x1b[?62;4;22c')
         break
       case 'd':
         this.moveTo(b.x, (this.originMode ? b.top : 0) + p(0, 1) - 1)
@@ -733,6 +873,9 @@ export class Terminal implements ParserHandler {
         break
       case 't':
         if (raw(0) === 18) this.reply(`\x1b[8;${this.rows};${this.cols}t`)
+        // In pixels: the text area (14) and one cell (16) — what a program sizes a picture by.
+        else if (raw(0) === 14) this.reply(`\x1b[4;${this.rows * this.cellPixels.height};${this.cols * this.cellPixels.width}t`)
+        else if (raw(0) === 16) this.reply(`\x1b[6;${this.cellPixels.height};${this.cellPixels.width}t`)
         break
     }
   }
@@ -793,6 +936,7 @@ export class Terminal implements ParserHandler {
     b.y = 0
     this.trimmed += removed
     this.commands = this.commands.filter((c) => c.prompt >= this.trimmed)
+    this.dropPicturesAbove(this.trimmed)
     for (const l of this.changeListeners) l()
   }
 
@@ -901,13 +1045,15 @@ export class Terminal implements ParserHandler {
     if (alt) {
       if (withCursor) this.saveCursor()
       this.alt = new ScreenBuffer(this.cols, this.rows, false)
-      // A new alternate screen starts with no keyboard flags of a program before.
+      // A new alternate screen starts with no keyboard flags of a program before, and no pictures.
       this.kittyAlt = []
+      this.altPictures = []
       this.alt.x = this.normal.x
       this.alt.y = this.normal.y
       this.buffer = this.alt
     } else {
       this.buffer = this.normal
+      this.altPictures = []
       if (withCursor) this.restoreCursor()
     }
     this.wrapNext = false
@@ -1055,8 +1201,14 @@ export class Terminal implements ParserHandler {
         b.dropTop(extra)
         this.trimmed += extra
         if (this.commands.length && this.commands[0]!.prompt < this.trimmed) this.commands = this.commands.filter((c) => c.prompt >= this.trimmed)
+        this.dropPicturesAbove(this.trimmed)
       }
       return
+    }
+    // The alternate screen scrolled as a whole: its pictures go up with the text.
+    if (b === this.alt && at === 0 && b.top === 0 && this.altPictures.length) {
+      for (const p of this.altPictures) p.row -= n
+      this.altPictures = this.altPictures.filter((p) => p.row + p.rows > 0)
     }
     // The base before the splices: they change the length it is counted from.
     const base = b.base
@@ -1084,11 +1236,18 @@ export class Terminal implements ParserHandler {
       for (let y = 0; y < b.y; y++) this.clearRow(y, attr)
     } else if (mode === 2) {
       for (let y = 0; y < this.rows; y++) this.clearRow(y, attr)
+      // The screen's pictures go with its text.
+      if (b === this.alt) this.altPictures = []
+      else {
+        const first = b.base + this.trimmed
+        this.pictures = this.pictures.filter((p) => p.row + p.rows <= first)
+      }
     } else if (mode === 3 && b.scrollback) {
       // The scrollback goes; the screen stays.
       const removed = b.base
       b.lines.splice(0, removed)
       this.trimmed += removed
+      this.dropPicturesAbove(this.trimmed)
     }
   }
 
@@ -1230,7 +1389,7 @@ export class Terminal implements ParserHandler {
     b.lines = out
     b.x = Math.min(newCursorX, cols - 1)
     b.y = newCursorRow - base
-    if (b === this.normal && this.commands.length) {
+    if (b === this.normal && (this.commands.length || this.pictures.length)) {
       const before = this.trimmed - Math.max(0, extra)
       const place = (row: number | undefined): number | undefined => {
         if (row === undefined) return undefined
@@ -1241,6 +1400,8 @@ export class Terminal implements ParserHandler {
       this.commands = this.commands
         .map((c) => ({ ...c, prompt: place(c.prompt)!, input: place(c.input), output: place(c.output), end: place(c.end) }))
         .filter((c) => c.prompt >= this.trimmed)
+      // A picture keeps its row (its text reflowed around it), its cells by the new width.
+      this.pictures = this.pictures.map((p) => ({ ...p, row: place(p.row)!, col: Math.min(p.col, cols - 1), cols: Math.min(p.cols, cols) })).filter((p) => p.row + p.rows > this.trimmed)
     }
   }
 }

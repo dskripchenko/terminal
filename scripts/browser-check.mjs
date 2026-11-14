@@ -284,6 +284,23 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.waitForTimeout(400)
     check(`${name}: a synchronized frame that never ends is shown after the timeout`, await shown('frame-never-ended'))
     await page.evaluate(() => window.term.write('\x1b[?2026l'))
+    // Pictures: a sixel one on a canvas, a kitty PNG as an image, each over its cells.
+    await page.evaluate(() => {
+      window.term.reset()
+      window.term.write('\x1bP0;1q"1;1;16;12#1;2;100;0;0!16~-!16~\x1b\\')
+      // A 2×2 red PNG.
+      window.term.write('\x1b_Ga=T,f=100;iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DAwMDAxMDAAAAeBQHDqPLJlQAAAABJRU5ErkJggg==\x1b\\')
+      window.view.scrollToBottom()
+    })
+    await page.waitForTimeout(150)
+    const pics = await page.locator('.dsk-term-picture').evaluateAll((els) => els.map((e) => e.tagName + ':' + Math.round(e.getBoundingClientRect().width)))
+    check(`${name}: pictures drawn over their cells`, pics.length === 2 && pics[0].startsWith('CANVAS') && pics[1].startsWith('IMG'), JSON.stringify(pics))
+    const sixelRed = await page.locator('canvas.dsk-term-picture').evaluate((c) => [...c.getContext('2d').getImageData(1, 1, 1, 1).data].join(','))
+    check(`${name}: a sixel picture's pixels`, sixelRed === '255,0,0,255', sixelRed)
+    await page.evaluate(() => window.term.write('\x1b[2J'))
+    await page.waitForTimeout(100)
+    check(`${name}: pictures gone with the screen`, (await page.locator('.dsk-term-picture').count()) === 0)
+
     check(`${name}: no errors`, errors.length === 0, errors.join('; '))
   } catch (e) {
     check(`${name}: ran to the end`, false, String(e).split('\n')[0])

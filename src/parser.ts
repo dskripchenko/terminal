@@ -3,8 +3,8 @@
  * (after Paul Williams' description at vt100.net), on text already decoded
  * from UTF-8. It knows the shape of sequences, not their meaning: printable
  * runs, C0/C1 controls, CSI with parameters and sub-parameters (`38:2::1:2:3`),
- * ESC, OSC strings; DCS, SOS, PM and APC strings are read to their end and
- * passed over. A sequence split between two writes is continued in the next.
+ * ESC, OSC strings; DCS and APC strings (sixel pictures, the kitty graphics
+ * protocol) handed over whole; SOS and PM read to their end and passed over. A sequence split between two writes is continued in the next.
  */
 
 export interface ParserHandler {
@@ -21,6 +21,10 @@ export interface ParserHandler {
   esc(intermediates: string, final: string): void
   /** An operating system command: `0;title`, `8;;https://…`. */
   osc(data: string): void
+  /** A device control string, whole (`q…` — a sixel picture, after its parameters `0;1`). */
+  dcs?(data: string): void
+  /** An application program command, whole (`G…` — the kitty graphics protocol). */
+  apc?(data: string): void
 }
 
 const enum State {
@@ -32,9 +36,15 @@ const enum State {
   CsiIntermediate,
   CsiIgnore,
   Osc,
-  /** DCS, SOS, PM, APC: read to the string terminator and dropped. */
+  /** SOS, PM: read to the string terminator and dropped. */
   Ignored,
+  /** DCS and APC: kept to the string terminator (ST), then handed over. */
+  Dcs,
+  Apc,
 }
+
+/** A DCS or APC string longer than this is dropped (a stray one must not eat memory). */
+const MAX_STRING = 48 << 20
 
 /** More parameters than this are dropped (as terminals do). */
 const MAX_PARAMS = 32
@@ -51,6 +61,9 @@ export class Parser {
   private oscData = ''
   /** ESC seen inside a string: a `\` after it ends the string. */
   private stringEsc = false
+  /** A DCS or APC string so far, in pieces (joined once at its end). */
+  private parts: string[] = []
+  private partsLen = 0
 
   constructor(private readonly h: ParserHandler) {}
 
@@ -69,7 +82,7 @@ export class Parser {
       const c = data.charCodeAt(i)
 
       // Strings: everything up to BEL (OSC) or ST.
-      if (this.state === State.Osc || this.state === State.Ignored) {
+      if (this.state === State.Osc || this.state === State.Ignored || this.state === State.Dcs || this.state === State.Apc) {
         if (this.stringEsc) {
           this.stringEsc = false
           if (c === 0x5c) {
@@ -87,7 +100,8 @@ export class Parser {
           i++
           continue
         }
-        if (c === 0x07 || c === 0x9c) {
+        // BEL ends an OSC (as xterm has it); the other strings only ST.
+        if (c === 0x9c || (c === 0x07 && (this.state === State.Osc || this.state === State.Ignored))) {
           this.endString()
           i++
           continue
@@ -96,6 +110,20 @@ export class Parser {
           this.state = State.Ground
           this.oscData = ''
           i++
+          continue
+        }
+        if (this.state === State.Dcs || this.state === State.Apc) {
+          let j = i
+          while (j < n) {
+            const d = data.charCodeAt(j)
+            if (d === 0x1b || d === 0x9c || d === 0x18 || d === 0x1a) break
+            j++
+          }
+          if (this.partsLen <= MAX_STRING) {
+            this.parts.push(data.slice(i, j))
+            this.partsLen += j - i
+          }
+          i = j
           continue
         }
         if (this.state === State.Osc) {
@@ -158,7 +186,9 @@ export class Parser {
             this.state = State.EscapeIntermediate
           } else if (c === 0x5b) this.enterCsi()
           else if (c === 0x5d) this.enterOsc()
-          else if (c === 0x50 || c === 0x58 || c === 0x5e || c === 0x5f) this.state = State.Ignored
+          else if (c === 0x50) this.enterString(State.Dcs)
+          else if (c === 0x5f) this.enterString(State.Apc)
+          else if (c === 0x58 || c === 0x5e) this.state = State.Ignored
           else if (c !== 0x7f) {
             this.h.esc('', String.fromCharCode(c))
             this.state = State.Ground
@@ -195,9 +225,13 @@ export class Parser {
         this.enterOsc()
         return
       case 0x90:
+        this.enterString(State.Dcs)
+        return
+      case 0x9f:
+        this.enterString(State.Apc)
+        return
       case 0x98:
       case 0x9e:
-      case 0x9f:
         this.state = State.Ignored
         return
       default:
@@ -225,9 +259,23 @@ export class Parser {
     this.state = State.Osc
   }
 
+  private enterString(state: State.Dcs | State.Apc): void {
+    this.parts = []
+    this.partsLen = 0
+    this.stringEsc = false
+    this.state = state
+  }
+
   private endString(): void {
     if (this.state === State.Osc) this.h.osc(this.oscData)
+    else if ((this.state === State.Dcs || this.state === State.Apc) && this.partsLen <= MAX_STRING) {
+      const data = this.parts.join('')
+      if (this.state === State.Dcs) this.h.dcs?.(data)
+      else this.h.apc?.(data)
+    }
     this.oscData = ''
+    this.parts = []
+    this.partsLen = 0
     this.state = State.Ground
   }
 

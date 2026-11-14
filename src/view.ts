@@ -8,6 +8,7 @@
 import { keySequence, mouseSequence } from './input'
 import { BLINK, BOLD, COLOR_KIND, CURLY_UNDERLINE, DIM, DOUBLE_UNDERLINE, HIDDEN, INVERSE, ITALIC, LINK_SHIFT, OVERLINE, PALETTE, RGB, STRIKE, UNDERLINE, type Line } from './line'
 import type { Command, Terminal } from './terminal'
+import type { PictureSource } from './pictures'
 
 export interface TerminalTheme {
   foreground: string
@@ -92,6 +93,8 @@ const CSS = `
 .dsk-term.reverse { background: var(--dsk-term-fg); color: var(--dsk-term-bg); }
 .dsk-term-rows { position: absolute; left: 18px; right: 8px; top: 0; }
 .dsk-term-row { white-space: pre; overflow: hidden; }
+.dsk-term-pictures { position: absolute; left: 0; top: 0; pointer-events: none; }
+.dsk-term-picture { position: absolute; image-rendering: auto; }
 .dsk-term-row span { white-space: pre; }
 .dsk-term-wide { display: inline-block; text-align: center; overflow: visible; }
 .dsk-term-cursor { position: absolute; pointer-events: none; box-sizing: border-box; }
@@ -172,6 +175,9 @@ export class TerminalView {
   private readonly cursorEl: HTMLElement
   private readonly selLayer: HTMLElement
   private readonly markLayer: HTMLElement
+  /** Pictures in the output (sixel, kitty): an element each, made when it comes into view. */
+  private readonly picLayer: HTMLElement
+  private readonly picEls = new Map<number, HTMLElement>()
   private found: { row: number; from: number; to: number }[] = []
   private currentMatch = -1
   private providers: Provider[]
@@ -218,6 +224,8 @@ export class TerminalView {
     this.rowsEl.className = 'dsk-term-rows'
     this.selLayer = document.createElement('div')
     this.markLayer = document.createElement('div')
+    this.picLayer = document.createElement('div')
+    this.picLayer.className = 'dsk-term-pictures'
     this.cursorEl = document.createElement('div')
     this.cursorEl.className = 'dsk-term-cursor'
     this.input = document.createElement('textarea')
@@ -228,7 +236,7 @@ export class TerminalView {
     this.input.spellcheck = false
     this.input.setAttribute('aria-label', 'Terminal input')
     // The input field lives among the rows: placed at the cursor, it never makes the scroll longer.
-    this.rowsEl.append(this.selLayer, this.markLayer, this.cursorEl, this.input)
+    this.rowsEl.append(this.selLayer, this.markLayer, this.picLayer, this.cursorEl, this.input)
     this.element.append(this.spacer, this.rowsEl)
     host.append(this.element)
     this.measure()
@@ -437,6 +445,9 @@ export class TerminalView {
     this.cellW = w > 0 ? w : this.o.fontSize * 0.6
     this.rowH = Math.round(this.o.fontSize * this.o.lineHeight)
     this.rowsEl.style.lineHeight = `${this.rowH}px`
+    // A program sizing a picture asks for the cell in pixels (as the screen has them).
+    const dpr = window.devicePixelRatio || 1
+    this.term.setCellPixels(this.cellW * dpr, this.rowH * dpr)
   }
 
   private schedule(): void {
@@ -461,6 +472,38 @@ export class TerminalView {
     this.heldSince = null
     this.pending = false
     this.render()
+  }
+
+  /** The pictures in view placed over their cells; the others' elements let go. */
+  private drawPictures(top: number, count: number): void {
+    const term = this.term
+    const offset = term.buffer === term.alt ? 0 : term.trimmed
+    const seen = new Set<number>()
+    for (const p of term.screenPictures) {
+      const index = p.row - offset
+      if (index + p.rows <= top || index >= top + count) continue
+      seen.add(p.id)
+      let el = this.picEls.get(p.id)
+      if (!el) {
+        el = pictureElement(p.source)
+        el.className = 'dsk-term-picture'
+        this.picEls.set(p.id, el)
+        this.picLayer.append(el)
+      }
+      // Its own proportions, inside the cells it covers.
+      const boxW = p.cols * this.cellW
+      const boxH = p.rows * this.rowH
+      const scale = Math.min(boxW / p.width, boxH / p.height)
+      el.style.left = `${p.col * this.cellW}px`
+      el.style.top = `${(index - top) * this.rowH}px`
+      el.style.width = `${p.width * scale}px`
+      el.style.height = `${p.height * scale}px`
+    }
+    for (const [id, el] of this.picEls) {
+      if (seen.has(id)) continue
+      el.remove()
+      this.picEls.delete(id)
+    }
   }
 
   private lineAt(row: number): Line | undefined {
@@ -514,6 +557,8 @@ export class TerminalView {
     }
     for (let i = count; i < rowEls.length; i++) rowEls[i]!.remove()
     this.drawn.length = count
+
+    this.drawPictures(top, count)
 
     // The cursor, where it is in view.
     const cy = b.base + b.y - top
@@ -909,6 +954,21 @@ export class TerminalView {
     void this.element.offsetWidth
     this.element.classList.add('bell')
   }
+}
+
+/** A picture as an element: a PNG as an image, pixels on a canvas. */
+function pictureElement(source: PictureSource): HTMLElement {
+  if (source.kind === 'png') {
+    const img = document.createElement('img')
+    img.alt = ''
+    img.src = `data:image/png;base64,${source.base64}`
+    return img
+  }
+  const canvas = document.createElement('canvas')
+  canvas.width = source.width
+  canvas.height = source.height
+  canvas.getContext('2d')?.putImageData(new ImageData(source.data as Uint8ClampedArray<ArrayBuffer>, source.width, source.height), 0, 0)
+  return canvas
 }
 
 /** A row's text and, for each of its UTF-16 positions, the column it stands in (one past the end too). */
