@@ -222,6 +222,15 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.locator('.dsk-term-link', { hasText: 'src/main.ts:12' }).click()
     await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control')
     check(`${name}: a path link handed to the host`, (await page.evaluate(() => window.links[0])) === 'path:src/main.ts:12')
+    // Marks of the host's own (a trigger's): found by a pattern, a background, not a link; replaced at once.
+    await page.evaluate(() => window.view.setLinks([{ pattern: /error/g, highlight: '#ff000055' }, { pattern: /[\w.\-/]+\.\w+:\d+/g, activate: (t) => window.links.push('path:' + t) }]))
+    await page.waitForTimeout(50)
+    const marked = await page.locator('.dsk-term-mark-text').evaluateAll((els) => els.map((e) => e.textContent + '|' + e.getAttribute('style')))
+    check(`${name}: a highlight from a pattern`, marked.length === 1 && marked[0] === 'error|background:#ff000055', JSON.stringify(marked))
+    await page.evaluate(() => window.view.setLinks([{ pattern: /error/g, highlight: 'red;background-image:url(x)' }]))
+    await page.waitForTimeout(50)
+    check(`${name}: only a colour goes into a highlight's style`, (await page.locator('.dsk-term-mark-text').first().getAttribute('style')) === null)
+    await page.evaluate(() => window.view.setLinks([{ pattern: /[\w.\-/]+\.\w+:\d+/g, activate: (t) => window.links.push('path:' + t) }]))
     // Find in the buffer: every match marked, one current.
     const n = await page.evaluate(() => window.view.find(/e/i))
     await page.evaluate(() => window.view.showMatch(1))

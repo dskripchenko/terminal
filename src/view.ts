@@ -65,7 +65,20 @@ export interface TerminalViewOptions {
 export interface LinkProvider {
   /** What it finds in a row's text (matched as a global expression). */
   pattern: RegExp
-  activate(text: string, event: MouseEvent): void
+  /** Opened with Cmd (Ctrl) and a click; none — only marked (`highlight`), not a link. */
+  activate?(text: string, event: MouseEvent): void
+  /** A background for what it finds (a CSS colour): a mark in the output, as a trigger's. */
+  highlight?: string
+}
+
+/** A colour as CSS writes it — nothing else goes into a style. */
+const CSS_COLOR = /^(#[0-9a-fA-F]{3,8}|(rgb|rgba|hsl|hsla)\([\d\s.,%/]+\)|[a-zA-Z]+)$/
+
+type Provider = { pattern: RegExp; activate?: (text: string, e: MouseEvent) => void; url: boolean; highlight?: string }
+
+function providerOf(l: LinkProvider): Provider {
+  const pattern = new RegExp(l.pattern.source, l.pattern.flags.includes('g') ? l.pattern.flags : l.pattern.flags + 'g')
+  return { pattern, url: false, ...(l.activate ? { activate: l.activate } : {}), ...(l.highlight && CSS_COLOR.test(l.highlight.trim()) ? { highlight: l.highlight.trim() } : {}) }
 }
 
 const CSS = `
@@ -155,7 +168,8 @@ export class TerminalView {
   private readonly markLayer: HTMLElement
   private found: { row: number; from: number; to: number }[] = []
   private currentMatch = -1
-  private readonly providers: { pattern: RegExp; activate: (text: string, e: MouseEvent) => void; url: boolean }[]
+  private providers: Provider[]
+  private readonly urlProvider: Provider[]
   private readonly input: HTMLTextAreaElement
   private cellW = 8
   private rowH = 16
@@ -186,10 +200,8 @@ export class TerminalView {
     this.o = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.25, wheelLines: 3, ...options }
     this.trimmed = term.trimmed
     // Addresses first (when the host opens them), then the host's own kinds of links.
-    this.providers = [
-      ...(options.onLink ? [{ pattern: URL_RE, activate: (url: string) => options.onLink!(url), url: true }] : []),
-      ...(options.links ?? []).map((l) => ({ pattern: new RegExp(l.pattern.source, l.pattern.flags.includes('g') ? l.pattern.flags : l.pattern.flags + 'g'), activate: l.activate, url: false })),
-    ]
+    this.urlProvider = options.onLink ? [{ pattern: URL_RE, activate: (url: string) => options.onLink!(url), url: true }] : []
+    this.providers = [...this.urlProvider, ...(options.links ?? []).map(providerOf)]
     this.element = document.createElement('div')
     this.element.className = 'dsk-term'
     this.element.setAttribute('role', 'log')
@@ -229,6 +241,13 @@ export class TerminalView {
 
   focus(): void {
     this.input.focus({ preventScroll: true })
+  }
+
+  /** The host's kinds of links and marks replaced (its settings changed); the rows drawn again. */
+  setLinks(links: LinkProvider[]): void {
+    this.providers = [...this.urlProvider, ...links.map(providerOf)]
+    this.drawn = []
+    this.render()
   }
 
   setTheme(theme: TerminalTheme): void {
@@ -571,7 +590,10 @@ export class TerminalView {
     for (const f of found) {
       if (f.at < pos) continue
       const text = raw.slice(f.at, f.end)
-      out += escapeHtml(raw.slice(pos, f.at)) + `<span class="dsk-term-link${this.providers[f.p]!.url ? ' url' : ''}" data-p="${f.p}" data-t="${escapeHtml(text)}">${escapeHtml(text)}</span>`
+      const pr = this.providers[f.p]!
+      const mark = pr.highlight ? ` style="background:${pr.highlight}"` : ''
+      out += escapeHtml(raw.slice(pos, f.at))
+      out += pr.activate ? `<span class="dsk-term-link${pr.url ? ' url' : ''}" data-p="${f.p}" data-t="${escapeHtml(text)}"${mark}>${escapeHtml(text)}</span>` : `<span class="dsk-term-mark-text"${mark}>${escapeHtml(text)}</span>`
       pos = f.end
     }
     return out + escapeHtml(raw.slice(pos))
@@ -739,7 +761,7 @@ export class TerminalView {
       const target = e.target as HTMLElement
       const link = target.closest<HTMLElement>('.dsk-term-link')
       if (link && (mac ? e.metaKey : e.ctrlKey)) {
-        if (link.dataset.p !== undefined) this.providers[Number(link.dataset.p)]?.activate(link.dataset.t ?? '', e)
+        if (link.dataset.p !== undefined) this.providers[Number(link.dataset.p)]?.activate?.(link.dataset.t ?? '', e)
         else {
           const url = this.term.links[Number(link.dataset.link)] ?? ''
           if (url && this.o.onLink) this.o.onLink(url)
