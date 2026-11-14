@@ -16,6 +16,11 @@ export interface KeyLike {
 
 export interface KeyModes {
   applicationCursor: boolean
+  /**
+   * The kitty keyboard protocol's flags the program asked for (`CSI > flags u`);
+   * only 1, "disambiguate", is kept: Esc, and keys with Ctrl or Alt, as `CSI code;mods u`.
+   */
+  kittyFlags?: number
   /** Alt (Option on a Mac) sends ESC before the key, rather than the character the layout gives. */
   altIsMeta: boolean
 }
@@ -44,6 +49,10 @@ function physical(e: KeyLike): string | null {
  */
 export function keySequence(e: KeyLike, m: KeyModes): string | null {
   if (e.metaKey) return null
+  if ((m.kittyFlags ?? 0) & 1) {
+    const k = kittyKey(e)
+    if (k !== undefined) return k
+  }
   const mod = modifier(e)
   const cursor = CURSOR[e.key]
   if (cursor) {
@@ -85,6 +94,29 @@ export function keySequence(e: KeyLike, m: KeyModes): string | null {
     }
   }
   return null
+}
+
+const KITTY_CODES: Record<string, number> = { Escape: 27, Enter: 13, Tab: 9, Backspace: 127 }
+
+/**
+ * A key under the kitty protocol's "disambiguate" flag: Esc always as
+ * `CSI 27 u`; Enter, Tab and Backspace as before unless a modifier is held
+ * (so a shell left in the mode still runs `reset`); a key with Ctrl or Alt as
+ * `CSI code;mods u`, the code the key's own (unshifted) character. Other keys
+ * (arrows, function keys, plain text): undefined — as without the protocol.
+ */
+function kittyKey(e: KeyLike): string | undefined {
+  const mod = modifier(e)
+  const suffix = mod > 1 ? `;${mod}` : ''
+  const special = KITTY_CODES[e.key]
+  if (special !== undefined) {
+    if (e.key === 'Escape') return `\x1b[27${suffix}u`
+    return mod > 1 ? `\x1b[${special}${suffix}u` : undefined
+  }
+  if (!e.ctrlKey && !e.altKey) return undefined
+  const k = physical(e) ?? (e.key.length === 1 ? e.key.toLowerCase() : null)
+  if (!k || k.length !== 1) return undefined
+  return `\x1b[${k.codePointAt(0)}${suffix}u`
 }
 
 /** A mouse event as the program asked for it: SGR (`1006`) or the old X10 bytes. */
