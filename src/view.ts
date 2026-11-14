@@ -7,7 +7,7 @@
  */
 import { keySequence, mouseSequence } from './input'
 import { BLINK, BOLD, COLOR_KIND, CURLY_UNDERLINE, DIM, DOUBLE_UNDERLINE, HIDDEN, INVERSE, ITALIC, LINK_SHIFT, OVERLINE, PALETTE, RGB, STRIKE, UNDERLINE, type Line } from './line'
-import type { Terminal } from './terminal'
+import type { Command, Terminal } from './terminal'
 
 export interface TerminalTheme {
   foreground: string
@@ -51,6 +51,12 @@ export interface TerminalViewOptions {
    * a click, by its `activate`.
    */
   links?: LinkProvider[]
+  /**
+   * A command's block asked for (its mark clicked, or the output right-clicked
+   * — not while a program reads the mouse): the host may show what can be done
+   * with it (`commandText` gives its text and output).
+   */
+  onCommand?: (command: Command, event: MouseEvent) => void
   /** The size changed (`fit`): the pseudo-terminal behind should change too. */
   onResize?: (cols: number, rows: number) => void
   /**
@@ -274,6 +280,40 @@ export class TerminalView {
     }
     this.schedule()
     return { cols: this.term.cols, rows: this.term.rows }
+  }
+
+  /** The text of rows `from` (inclusive) to `to` (exclusive), wrapped rows joined, trailing blanks off. */
+  private rowsText(from: number, to: number): string {
+    const out: string[] = []
+    for (let r = from; r < to; r++) {
+      const line = this.lineAt(r)
+      if (!line) continue
+      out.push(line.text(0, this.term.cols, true))
+      if (r < to - 1 && !line.wrapped) out.push('\n')
+    }
+    return out.join('').replace(/\n+$/, '')
+  }
+
+  /** The command whose block (its prompt to its end) holds a point of the view; null outside any. */
+  commandAt(clientX: number, clientY: number): Command | null {
+    const row = this.cellAt(clientX, clientY).row
+    const list = this.term.commands
+    for (let i = list.length - 1; i >= 0; i--) {
+      const c = list[i]!
+      const end = c.end ?? list[i + 1]?.prompt ?? this.term.buffer.length + this.term.trimmed
+      if (row >= c.prompt && row < Math.max(end, c.prompt + 1)) return c
+    }
+    return null
+  }
+
+  /** A command's text (as the shell said it, else its input row) and its output, as text. */
+  commandText(c: Command): { command: string; output: string } {
+    const inputRow = c.input ?? c.prompt
+    const typed = this.lineAt(inputRow)?.text(0, this.term.cols, true) ?? ''
+    const command = c.text ?? typed
+    const end = c.end ?? this.term.buffer.length + this.term.trimmed
+    const output = c.output !== undefined ? this.rowsText(c.output, end) : ''
+    return { command: command.trim(), output }
   }
 
   /** The selected text (rows that wrapped joined without a line break). */
@@ -777,6 +817,7 @@ export class TerminalView {
           this.head = { row: (c.end ?? this.term.buffer.length + this.term.trimmed) - 1, col: this.term.cols }
           this.schedule()
         }
+        if (c) this.o.onCommand?.(c, e)
         return
       }
       if (tracking(e)) {
@@ -853,7 +894,13 @@ export class TerminalView {
       { passive: false },
     )
     add(el, 'contextmenu', (e) => {
-      if (tracking(e)) e.preventDefault()
+      if (tracking(e)) return e.preventDefault()
+      // A command's block: the host's menu for it, in place of the page's.
+      const c = this.o.onCommand && !this.hasSelection() ? this.commandAt(e.clientX, e.clientY) : null
+      if (c) {
+        e.preventDefault()
+        this.o.onCommand!(c, e)
+      }
     })
   }
 
